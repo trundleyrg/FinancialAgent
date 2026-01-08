@@ -4,6 +4,7 @@
 
 ## 文件结构
 
+```text
 FinancialAgent/
 ├── src/
 │   ├── agents/
@@ -13,7 +14,7 @@ FinancialAgent/
 │   │   └── nodes.py          # 具体的节点函数实现 (如 parse_pdf, save_data)
 │   ├── tools/
 │   │   ├── __init__.py
-│   │   ├── pdf_parser.py     # 集成文本和表格提取工具 (如 PyMuPDF, TableTransformer)
+│   │   ├── general_pdf_parser.py     # 集成文本和表格提取工具 (如 PyMuPDF, TableTransformer)
 │   │   ├── db_connector.py   # 数据库操作逻辑 (SQLAlchemy 或 DuckDB)
 │   │   └── file_manager.py   # 负责 Markdown 生成和文件夹管理
 │   ├── schema/
@@ -30,3 +31,4 @@ FinancialAgent/
 ├── .env                      # 敏感信息 (API Keys, DB Credentials)
 ├── main.py                   # 程序入口，初始化 Agent 并运行
 └── requirements.txt          # 依赖列表
+```
