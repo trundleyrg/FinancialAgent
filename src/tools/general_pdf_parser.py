@@ -1,18 +1,16 @@
 """
+pdf通用解析类
 集成文本和表格提取工具 (如 PyMuPDF, TableTransformer)
 """
 
-from typing import List, Optional
-# from langchain_openai import ChatOpenAI
-from src.schema.models import FinancialExtractionSchema
-from src.utils.logger import logger
-
-import os
 import fitz  # PyMuPDF
 import pdfplumber
 import pathlib
-from typing import Optional
-from src.utils.logger import logger
+import json
+
+from typing import List, Optional
+from src.schema.models import FinancialExtractionSchema
+from src.utils.logger import pdf_logger
 
 class PDFParser:
     def __init__(self, output_base_dir: str = "./data/output"):
@@ -33,10 +31,9 @@ class PDFParser:
         主控方法：执行正文、图片和表格的提取
         """
         pdf_name = pathlib.Path(pdf_path).stem
-        logger.info(f"Processing PDF: {pdf_name}")
+        pdf_logger.info(f"Processing PDF: {pdf_name}")
 
         with fitz.open(pdf_path) as doc:
-            # 1. 提取正文并保存为 Markdown
             self._extract_text_to_md(doc, pdf_name)
             
             # 2. 提取图片
@@ -55,7 +52,7 @@ class PDFParser:
         md_file = self.output_dir / f"{pdf_name}.md"
         with open(md_file, "w", encoding="utf-8") as f:
             f.write("\n\n".join(md_content))
-        logger.info(f"Markdown saved to {md_file}")
+        pdf_logger.info(f"Markdown saved to {md_file}")
 
     def _extract_images(self, doc):
         """提取图片并保存至 output/imgs"""
@@ -75,8 +72,7 @@ class PDFParser:
 
     def _extract_tables(self, pdf, pdf_name: str):
         """
-        提取表格。
-        选择 Markdown 格式保存，因为它对 LLM 最友好，且易于阅读。
+        提取表格，以 Markdown 格式保存
         """
         prev_table = None
         
@@ -117,6 +113,7 @@ class PDFParser:
         """
         pdf_name = pathlib.Path(pdf_path).stem
         # 初始化一个基础结果字典
+        # todo: 其他来源填充下面的metadata
         extracted_data = {
             "company_name": pdf_name.split('_')[0],  # 假设文件名包含公司名
             "stock_code": "000000",                # 占位符
@@ -161,7 +158,7 @@ class PDFParser:
             validated_data = FinancialExtractionSchema(**extracted_data)
             return validated_data.model_dump_json()
         except Exception as e:
-            logger.warning(f"Schema validation failed: {e}. Returning raw dict as JSON.")
+            pdf_logger.warning(f"Schema validation failed: {e}. Returning raw dict as JSON.")
             return json.dumps(extracted_data, ensure_ascii=False)
 
     def _parse_numeric_value(self, cells: list) -> Optional[float]:
@@ -183,5 +180,5 @@ if __name__ == '__main__':
     # 运行处理
     pdf_file = "./data/raw_pdfs/22.佰仁医疗2024年年报.pdf"
     output_folder = "extracted_tables"
-    
-   
+    pdf_parser = PDFParser()
+    pdf_parser.process_pdf(pdf_file, output_folder=r"./data/output")
