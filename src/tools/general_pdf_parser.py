@@ -70,28 +70,72 @@ class PDFParser:
                 with open(img_filename, "wb") as f:
                     f.write(image_bytes)
 
+    def _is_header_row(self, row: list) -> bool:
+        """
+        检测一行是否为表头
+        通过常见的关键词和特征来判断
+        """
+        header_keywords = [
+            "项目", "金额", "比例", "本期", "上期", "单位", "年度",
+            "营业收入", "营业成本", "毛利率", "净利润", "ROE", "收益率",
+            "报告期", "日期", "期初", "期末", "变动", "增减"
+        ]
+        # 将行内容合并为一个字符串进行检测
+        row_text = " ".join([str(cell) for cell in row if cell])
+        # 如果包含多个关键词，或者第一列包含关键词，则认为是表头
+        keyword_count = sum(1 for kw in header_keywords if kw in row_text)
+        # 检查是否第一列就是典型的表头内容
+        first_col = str(row[0]).strip() if row else ""
+        first_col_is_header = any(kw in first_col for kw in header_keywords)
+        return keyword_count >= 2 or first_col_is_header
+
+    def _tables_match(self, table1: list, table2: list) -> bool:
+        """
+        判断两个表格是否可能属于同一个跨页表格
+        """
+        if not table1 or not table2:
+            return False
+        if len(table1[0]) != len(table2[0]):
+            return False
+        # 第二个表格的第一行不应该被识别为表头
+        if self._is_header_row(table2[0]):
+            return False
+        return True
+
     def _extract_tables(self, pdf, pdf_name: str):
         """
         提取表格，以 Markdown 格式保存
+        支持跨页表格的正确合并
         """
-        prev_table = None
-        
+        # 用于存储所有提取的表格，包括跨页合并后的表格
+        all_tables = []
+
         for i, page in enumerate(pdf.pages):
             tables = page.extract_tables()
-            
+
             for j, table in enumerate(tables):
-                # 数据清洗：移除空行
+                if not table:
+                    continue
+
+                # 数据清洗：移除空行，并用空字符串替换None
                 clean_table = [[(cell if cell else "") for cell in row] for row in table]
-                
-                # 简单的跨页逻辑判断：
-                # 如果当前页的第一个表格列数与上一页最后一个表格相同，且第一行不含标题特征，
-                # 在实际工程中，这里可以进一步通过状态机合并，目前先独立保存并标记。
-                
-                md_table = self._convert_to_md_table(clean_table)
-                table_filename = self.table_dir / f"page{i+1}_{j+1}.md"
-                
-                with open(table_filename, "w", encoding="utf-8") as f:
-                    f.write(md_table)
+                all_tables.append({
+                    "data": clean_table,
+                    "page": i+1
+                })
+
+        # todo：合并跨页表格
+
+        # 保存所有表格
+        for idx, table_info in enumerate(all_tables):
+            md_table = self._convert_to_md_table(table_info["data"])
+            # 使用跨页范围或单页码作为文件名
+            page_range = table_info["page"]
+            table_filename = self.table_dir / f"page{page_range}_table{idx+1}.md"
+
+            with open(table_filename, "w", encoding="utf-8") as f:
+                f.write(md_table)
+            pdf_logger.info(f"Saved table: {table_filename}")
 
     def _convert_to_md_table(self, table_data: list) -> str:
         """将嵌套列表转换为 Markdown 表格格式"""
@@ -180,5 +224,5 @@ if __name__ == '__main__':
     # 运行处理
     pdf_file = "./data/raw_pdfs/22.佰仁医疗2024年年报.pdf"
     output_folder = "extracted_tables"
-    pdf_parser = PDFParser()
-    pdf_parser.process_pdf(pdf_file, output_folder=r"./data/output")
+    pdf_parser = PDFParser(output_base_dir=r"./data/output")
+    pdf_parser.process_pdf(pdf_file)
