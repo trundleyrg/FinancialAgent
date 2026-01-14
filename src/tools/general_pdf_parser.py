@@ -10,10 +10,11 @@ import json
 
 from typing import Optional
 from collections import defaultdict
-from src.schema.models import FinancialExtractionSchema
+from src.schema.models import FinancialExtractionSchema, ReportPeriod
 from src.utils.logger import pdf_logger
 
 class PDFParser:
+
     def __init__(self, output_base_dir: str = "./data/output"):
         self.output_dir = pathlib.Path(output_base_dir)
         self.img_dir = self.output_dir / "imgs"
@@ -34,13 +35,12 @@ class PDFParser:
         pdf_name = pathlib.Path(pdf_path).stem
         pdf_logger.info(f"Processing PDF: {pdf_name}")
 
+        # 正文和图片
         with fitz.open(pdf_path) as doc:
             self._extract_text_to_md(doc, pdf_name)
-            
-            # 2. 提取图片
             self._extract_images(doc)
 
-        # 3. 提取表格 (使用 pdfplumber 获得更好的表格边界识别)
+        # 表格
         with pdfplumber.open(pdf_path) as pdf:
             self._extract_tables(pdf)
 
@@ -163,7 +163,6 @@ class PDFParser:
                     "pre_page": current_page,  # 记录跨页表格当前页
                 }  # 保留后一段匹配后面的页数
             else:
-                # ! 跨两页情况处理
                 if current_page - pre_table["pre_page"] == 1:
                     # 尝试合并
                     if self._tables_match(pre_table["data"], pages_dict[current_page][0]):
@@ -224,7 +223,6 @@ class PDFParser:
 
         return results
 
-
     def _merge_tables_data(self, pre_table: dict, table2: list):
         """
         合并两个表格数据
@@ -234,21 +232,22 @@ class PDFParser:
             "page": pre_table["page"],
             "pre_page": pre_table["pre_page"]
         }
-    def _is_header_row(self, row: list) -> bool:
-        """
-        检测一行是否为表头
-        通过常见的关键词和特征来判断
-        """
-        header_keywords = [  # todo: 修改表头检查
-            "项目", "金额", "比例", "本期", "上期", "单位", "年度",
-            "营业收入", "营业成本", "毛利率", "净利润", "ROE", "收益率",
-            "报告期", "日期", "期初", "期末", "变动", "增减"
-        ]
-        # 将行内容合并为一个字符串进行检测
-        row_text = " ".join([str(cell) for cell in row if cell])
-        # 如果包含多个关键词，或者第一列包含关键词，则认为是表头
-        keyword_count = sum(1 for kw in header_keywords if kw in row_text)
-        return keyword_count >= 2
+
+    # def _is_header_row(self, row: list) -> bool:
+    #     """
+    #     检测一行是否为表头
+    #     通过常见的关键词和特征来判断
+    #     """
+    #     header_keywords = [  # todo: 修改表头检查
+    #         "项目", "金额", "比例", "本期", "上期", "单位", "年度",
+    #         "营业收入", "营业成本", "毛利率", "净利润", "ROE", "收益率",
+    #         "报告期", "日期", "期初", "期末", "变动", "增减"
+    #     ]
+    #     # 将行内容合并为一个字符串进行检测
+    #     row_text = " ".join([str(cell) for cell in row if cell])
+    #     # 如果包含多个关键词，或者第一列包含关键词，则认为是表头
+    #     keyword_count = sum(1 for kw in header_keywords if kw in row_text)
+    #     return keyword_count >= 2
 
     def _tables_match(self, table1: list, table2: list) -> bool:
         """
@@ -258,9 +257,9 @@ class PDFParser:
             return False
         if len(table1[0]) != len(table2[0]):
             return False
-        # 第二个表格的第一行不应该被识别为表头
-        if self._is_header_row(table2[0]):
-            return False
+        # # 第二个表格的第一行不应该被识别为表头
+        # if self._is_header_row(table2[0]):
+        #     return False
         return True
 
     def _convert_to_md_table(self, table_data: list) -> str:

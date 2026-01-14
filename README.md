@@ -14,7 +14,7 @@ FinancialAgent/
 │   │   └── nodes.py          # 具体的节点函数实现 (如 parse_pdf, save_data)
 │   ├── tools/
 │   │   ├── __init__.py
-│   │   ├── general_pdf_parser.py     # 集成文本和表格提取工具 (如 PyMuPDF, TableTransformer)
+│   │   ├── general_pdf_parser.py     # 解析pdf，按照给定目录，将正文保存为md，表格保存为md，图片保存为jpg
 │   │   ├── db_connector.py   # 数据库操作逻辑 (SQLAlchemy 或 DuckDB)
 │   │   └── file_manager.py   # 负责 Markdown 生成和文件夹管理
 │   ├── schema/
