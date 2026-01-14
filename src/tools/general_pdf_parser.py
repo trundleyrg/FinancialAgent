@@ -9,6 +9,7 @@ import pathlib
 import json
 
 from typing import List, Optional
+from collections import defaultdict
 from src.schema.models import FinancialExtractionSchema
 from src.utils.logger import pdf_logger
 
@@ -41,7 +42,7 @@ class PDFParser:
 
         # 3. 提取表格 (使用 pdfplumber 获得更好的表格边界识别)
         with pdfplumber.open(pdf_path) as pdf:
-            self._extract_tables(pdf, pdf_name)
+            self._extract_tables(pdf)
 
     def _extract_text_to_md(self, doc, pdf_name: str):
         """提取正文并保存为 .md 文件"""
@@ -70,12 +71,174 @@ class PDFParser:
                 with open(img_filename, "wb") as f:
                     f.write(image_bytes)
 
+    # region 表格处理
+
+    def _extract_tables(self, pdf):
+        """
+        提取表格，以 Markdown 格式保存
+        支持跨页表格的正确合并
+        """
+        def clean_tabel_cell(cell):
+            """
+            数据清洗：将None替换为空字符串，去除表格中的换行符
+            """
+            cell = str(cell).replace("\n", "")
+            cell = cell.strip()
+            return "" if cell is None else str(cell)
+        
+        # 用于存储所有提取的表格，包括跨页合并后的表格
+        all_tables = []
+
+        for i, page in enumerate(pdf.pages[:32]):
+            tables = page.extract_tables()
+
+            tables = page.find_tables()  
+
+            for j, table in enumerate(tables):
+                bbox = table.bbox  # 左上右下
+                content = table.extract()
+                if not content:
+                    continue
+
+                # 数据清洗：移除空行，并用空字符串替换None
+                # 注意，填充为None的情况，表明该单元格是合并单元格
+                clean_table = [[clean_tabel_cell(cell) for cell in row] for row in content]
+                all_tables.append({
+                    "data": clean_table,
+                    "page": i+1
+                })
+
+        # 合并跨页表格
+        all_tables = self._merge_tables(all_tables)
+
+        # 保存所有表格
+        for idx, table_info in enumerate(all_tables):
+            md_table = self._convert_to_md_table(table_info["data"])
+            page_range = table_info["range"]
+            table_filename = self.table_dir / f"page{page_range}_table{idx+1}.md"
+
+            with open(table_filename, "w", encoding="utf-8") as f:
+                f.write(md_table)
+            pdf_logger.info(f"Saved table: {table_filename}")
+
+    def _merge_tables(self, all_tables):
+        """
+        合并连续的表格数据
+
+        Args:
+            all_tables: List[Dict], 每个元素包含 "data" 和 "page"
+
+        Returns:
+            List[Dict]: 合并后的列表，每个元素包含 "data", "page"(已废弃), "range"
+        """
+        if not all_tables:
+            return []
+
+        # 步骤1: 按 page 分组，保持每页内表格的原始顺序
+        pages_dict = defaultdict(list)
+        for table in all_tables:
+            pages_dict[table["page"]].append(table["data"])
+
+        # 获取所有唯一 page 并排序
+        sorted_pages = sorted(pages_dict.keys())
+        if not sorted_pages:
+            return []
+        
+        # 步骤2: 识别连续段并合并
+        results = []
+        start, end = 0, len(sorted_pages)
+        pre_table= None
+        while start < end:
+            current_page = sorted_pages[start]
+            if pre_table is None:
+                for i in range(len(pages_dict[current_page]) - 1):
+                    results.append({
+                            "data": pages_dict[current_page][i],
+                            "range": str(current_page)
+                    })
+                pre_table = {
+                    "data": pages_dict[current_page][-1],
+                    "page": current_page,  # 记录跨页表格起始页
+                    "pre_page": current_page,  # 记录跨页表格当前页
+                }  # 保留后一段匹配后面的页数
+            else:
+                # ! 跨两页情况处理
+                if current_page - pre_table["pre_page"] == 1:
+                    # 尝试合并
+                    if self._tables_match(pre_table["data"], pages_dict[current_page][0]):
+                        pre_table["pre_page"] = current_page
+                        pre_table = self._merge_tables_data(pre_table, pages_dict[current_page][0])
+                        if len(pages_dict[current_page]) > 1 and pre_table:
+                            results.append({
+                                "data": pre_table["data"],
+                                "range": str(pre_table["page"]) + "-" + str(current_page)
+                            })
+                            for i in range(1, len(pages_dict[current_page]) - 1):
+                                results.append({
+                                        "data": pages_dict[current_page][i],
+                                        "range": str(current_page)
+                                })
+                            pre_table = {
+                                "data": pages_dict[current_page][-1],
+                                "page": current_page,  # 记录跨页表格起始页
+                                "pre_page": current_page,  # 记录跨页表格当前页
+                            }
+                    else:
+                        results.append({
+                            "data": pre_table["data"],
+                            "range": str(pre_table["page"]) if pre_table["page"] == pre_table["pre_page"] else str(pre_table["page"]) + "-" + str(pre_table["page"]),
+                        })
+                        for i in range(len(pages_dict[current_page]) - 1):
+                            results.append({
+                                    "data": pages_dict[current_page][i],
+                                    "range": str(current_page)
+                            })
+                        pre_table = {
+                                "data": pages_dict[current_page][-1],
+                                "page": current_page,  # 记录跨页表格起始页
+                                "pre_page": current_page,  # 记录跨页表格当前页
+                        }
+                else:
+                    results.append({
+                        "data": pre_table["data"],
+                        "range": str(pre_table["page"]) if pre_table["page"] == pre_table["pre_page"] else str(pre_table["page"]) + "-" + str(pre_table["page"]),
+                    })
+                    for i in range(len(pages_dict[current_page]) - 1):
+                        results.append({
+                            "data": pages_dict[current_page][i],
+                            "range": str(current_page)
+                        })
+                    pre_table = {
+                        "data": pages_dict[current_page][-1],
+                        "page": current_page,  # 记录跨页表格起始页
+                        "pre_page": current_page,  # 记录跨页表格当前页
+                    }
+            start += 1
+
+        if pre_table:
+            results.append({
+                "data": pre_table["data"],
+                "range": str(pre_table["page"]) if pre_table["page"] == pre_table["pre_page"] else str(pre_table["page"]) + "-" + str(pre_table["page"]),
+            })
+
+        return results
+
+
+    def _merge_tables_data(self, pre_table: dict, table2: list):
+        """
+        合并两个表格数据
+        """
+        return {
+            "data": pre_table["data"] + table2,
+            "page": pre_table["page"],
+            "pre_page": pre_table["pre_page"]
+        }
     def _is_header_row(self, row: list) -> bool:
         """
         检测一行是否为表头
         通过常见的关键词和特征来判断
         """
-        header_keywords = [
+        header_keywords = [  # todo: 修改表头检查
             "项目", "金额", "比例", "本期", "上期", "单位", "年度",
             "营业收入", "营业成本", "毛利率", "净利润", "ROE", "收益率",
             "报告期", "日期", "期初", "期末", "变动", "增减"
@@ -84,10 +247,7 @@ class PDFParser:
         row_text = " ".join([str(cell) for cell in row if cell])
         # 如果包含多个关键词，或者第一列包含关键词，则认为是表头
         keyword_count = sum(1 for kw in header_keywords if kw in row_text)
-        # 检查是否第一列就是典型的表头内容
-        first_col = str(row[0]).strip() if row else ""
-        first_col_is_header = any(kw in first_col for kw in header_keywords)
-        return keyword_count >= 2 or first_col_is_header
+        return keyword_count >= 2
 
     def _tables_match(self, table1: list, table2: list) -> bool:
         """
@@ -101,41 +261,6 @@ class PDFParser:
         if self._is_header_row(table2[0]):
             return False
         return True
-
-    def _extract_tables(self, pdf, pdf_name: str):
-        """
-        提取表格，以 Markdown 格式保存
-        支持跨页表格的正确合并
-        """
-        # 用于存储所有提取的表格，包括跨页合并后的表格
-        all_tables = []
-
-        for i, page in enumerate(pdf.pages):
-            tables = page.extract_tables()
-
-            for j, table in enumerate(tables):
-                if not table:
-                    continue
-
-                # 数据清洗：移除空行，并用空字符串替换None
-                clean_table = [[(cell if cell else "") for cell in row] for row in table]
-                all_tables.append({
-                    "data": clean_table,
-                    "page": i+1
-                })
-
-        # todo：合并跨页表格
-
-        # 保存所有表格
-        for idx, table_info in enumerate(all_tables):
-            md_table = self._convert_to_md_table(table_info["data"])
-            # 使用跨页范围或单页码作为文件名
-            page_range = table_info["page"]
-            table_filename = self.table_dir / f"page{page_range}_table{idx+1}.md"
-
-            with open(table_filename, "w", encoding="utf-8") as f:
-                f.write(md_table)
-            pdf_logger.info(f"Saved table: {table_filename}")
 
     def _convert_to_md_table(self, table_data: list) -> str:
         """将嵌套列表转换为 Markdown 表格格式"""
@@ -218,6 +343,8 @@ class PDFParser:
             except ValueError:
                 continue
         return None
+    
+    # endregion
 
 
 if __name__ == '__main__':
