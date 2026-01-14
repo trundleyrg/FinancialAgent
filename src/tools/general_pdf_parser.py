@@ -1,6 +1,6 @@
 """
 pdf通用解析类
-集成文本和表格提取工具 (如 PyMuPDF, TableTransformer)
+将pdf正文保存为md，图片保存为 png，表格保存为 md
 """
 
 import fitz  # PyMuPDF
@@ -8,7 +8,7 @@ import pdfplumber
 import pathlib
 import json
 
-from typing import List, Optional
+from typing import Optional
 from collections import defaultdict
 from src.schema.models import FinancialExtractionSchema
 from src.utils.logger import pdf_logger
@@ -89,12 +89,13 @@ class PDFParser:
         # 用于存储所有提取的表格，包括跨页合并后的表格
         all_tables = []
 
-        for i, page in enumerate(pdf.pages[:32]):
+        for i, page in enumerate(pdf.pages):
             tables = page.extract_tables()
 
             tables = page.find_tables()  
 
             for j, table in enumerate(tables):
+                # todo: 依据bbox位置判断是否表格连接
                 bbox = table.bbox  # 左上右下
                 content = table.extract()
                 if not content:
@@ -129,7 +130,7 @@ class PDFParser:
             all_tables: List[Dict], 每个元素包含 "data" 和 "page"
 
         Returns:
-            List[Dict]: 合并后的列表，每个元素包含 "data", "page"(已废弃), "range"
+            List[Dict]: 合并后的列表，每个元素包含 "data", "range"
         """
         if not all_tables:
             return []
@@ -336,9 +337,9 @@ class PDFParser:
             # 移除逗号、百分号、空格
             clean_val = cell.replace(",", "").replace("%", "").strip()
             try:
-                # 财务报表中常见括号表示负数： (100.00) -> -100.00
-                if clean_val.startswith("(") and clean_val.endswith(")"):
-                    return -float(clean_val[1:-1])
+                # # 财务报表中常见括号表示负数： (100.00) -> -100.00
+                # if clean_val.startswith("(") and clean_val.endswith(")"):
+                #     return -float(clean_val[1:-1])
                 return float(clean_val)
             except ValueError:
                 continue
