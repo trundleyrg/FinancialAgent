@@ -62,6 +62,10 @@ pdf_logger = manager.get_logger(
     "PDFParser", "pdf_parser.log", max_bytes=20*1024*1024
 )
 
+chapter_logger = manager.get_logger(
+    "PDFChapterExtractor", "pdf_chapter_extractor.log", max_bytes=20*1024*1024
+)
+
 # Agent 节点日志：记录状态流转，10MB 轮转
 node_logger = manager.get_logger(
     "AgentNode", "agent_node.log"
