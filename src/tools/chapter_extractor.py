@@ -16,7 +16,8 @@ class TableWithHeader:
     """表格与表头的关联结构"""
     table_data: List[List[str]]  # 表格数据：二维列表
     header_text: str             # 关联的表头文本
-    page_num: int                # 表格起始页码
+    page_start_num: int          # 表格起始页码
+    page_end_num: int            # 表格结束页码
     bbox: Tuple[float, float, float, float]  # 表格位置 (x0, y0, x1, y1)
     is_merged: bool = False      # 是否为跨页合并表格
 
@@ -166,7 +167,8 @@ class PDFChapterExtractor:
                 raw_tables.append(TableWithHeader(
                     table_data=tab["table"].extract(),  # 二维列表
                     header_text=header,
-                    page_num=page_num,
+                    page_start_num=page_num,
+                    page_end_num=page_num,
                     bbox=tab["bbox"]
                 ))
         
@@ -180,13 +182,13 @@ class PDFChapterExtractor:
             while j < len(raw_tables):
                 next_tab = raw_tables[j]
                 # 必须是连续页面
-                if next_tab.page_num != current.page_num + (j - i):
+                if next_tab.page_start_num != current.page_start_num + (j - i):
                     break
                 # 检查合并条件
-                page1_h = self.page_heights[current.page_num + (j - i - 1)]
-                page2_h = self.page_heights[next_tab.page_num]
+                page1_h = self.page_heights[current.page_start_num + (j - i - 1)]
+                page2_h = self.page_heights[next_tab.page_start_num]
                 if self.should_merge_tables(
-                    {"bbox": current.bbox, "y_bottom": current.bbox[3], 
+                    {"bbox": current.bbox, "y_bottom": current.bbox[3],
                      "col_count": len(current.table_data[0]) if current.table_data else 0},
                     {"bbox": next_tab.bbox, "y_top": next_tab.bbox[1],
                      "col_count": len(next_tab.table_data[0]) if next_tab.table_data else 0},
@@ -194,6 +196,7 @@ class PDFChapterExtractor:
                 ):
                     # 合并数据
                     current.table_data += next_tab.table_data
+                    current.page_end_num = next_tab.page_end_num  # 更新结束页码
                     current.bbox = (
                         min(current.bbox[0], next_tab.bbox[0]),
                         current.bbox[1],
@@ -215,8 +218,10 @@ class PDFChapterExtractor:
         获取三大主表
         """
         # 获取三大主表
-        main_tables = []
-        for section_title in ["合并资产负债表", "合并利润表", "合并现金流量表"]:
+        main_tables = {}
+        for section_title in ["合并资产负债表", "母公司资产负债表", 
+                              "合并利润表", "母公司利润表", 
+                              "合并现金流量表", "母公司现金流量表"]:
             tables = self.extract_section_tables(section_title, section_level=3)
             if len(tables) > 1:
                 # 当前页中找到两个以上的表格，判断表头前的文本中是否出现相关文本
@@ -224,14 +229,15 @@ class PDFChapterExtractor:
                 for table in tables:
                     if section_title in table.header_text:
                         find_table = True
-                        main_tables.append(table)
+                        main_tables[section_title] = table
                         break
                 if not find_table:
                     chapter_logger.info(f"未找到{section_title}表")
             elif len(tables) < 1:
+                main_tables[section_title] = None
                 chapter_logger.info(f"未找到{section_title}表")
             else:
-                main_tables.append(tables[0])
+                main_tables[section_title] = tables[0]
         return main_tables
 
     def extract_section_tables(self, section_title: str, section_level: int = 1) -> List[TableWithHeader]:
@@ -258,8 +264,9 @@ if __name__ == "__main__":
         print(f"\n共提取 {len(tables)} 个表格（含跨页合并）:\n")
         for idx, tbl in enumerate(tables, 1):
             status = " [跨页合并]" if tbl.is_merged else ""
+            page_range = f"第 {tbl.page_start_num + 1} 页" if tbl.page_start_num == tbl.page_end_num else f"第 {tbl.page_start_num + 1}-{tbl.page_end_num + 1} 页"
             print(f"表格 {idx}{status}:")
-            print(f"  位置: 第 {tbl.page_num + 1} 页")
+            print(f"  位置: {page_range}")
             print(f"  表头: {tbl.header_text or '（空）'}")
             print(f"  尺寸: {len(tbl.table_data)} 行 x {len(tbl.table_data[0]) if tbl.table_data else 0} 列")
             # 打印前3行预览
