@@ -217,17 +217,18 @@ class PDFChapterExtractor:
         # 获取三大主表
         main_tables = []
         for section_title in ["合并资产负债表", "合并利润表", "合并现金流量表"]:
-            tables = self.extract_section_tables(section_title, sections_level=3)
-            if tables > 1:
+            tables = self.extract_section_tables(section_title, section_level=3)
+            if len(tables) > 1:
+                # 当前页中找到两个以上的表格，判断表头前的文本中是否出现相关文本
                 find_table = False
                 for table in tables:
-                    if section_title in table["header_text"]:
+                    if section_title in table.header_text:
                         find_table = True
                         main_tables.append(table)
                         break
                 if not find_table:
                     chapter_logger.info(f"未找到{section_title}表")
-            elif tables < 1:
+            elif len(tables) < 1:
                 chapter_logger.info(f"未找到{section_title}表")
             else:
                 main_tables.append(tables[0])
@@ -235,11 +236,11 @@ class PDFChapterExtractor:
 
     def extract_section_tables(self, section_title: str, section_level: int = 1) -> List[TableWithHeader]:
         """
-        主入口：提取指定章节的所有表格
+        提取指定章节的所有表格
         """
         start_page, end_page = self.find_section_range(section_title, section_level=section_level)
-        # 三大主表
-        main_tables = self.extract_main_tables(start_page, end_page)
+        tables = self.extract_tables_in_section(start_page, end_page)
+        return tables
 
     def close(self):
         self.doc.close()
@@ -252,7 +253,7 @@ if __name__ == "__main__":
     
     extractor = PDFChapterExtractor(pdf_file)
     try:
-        tables = extractor.extract_section_tables(section_title)
+        tables = extractor.extract_main_tables()
         
         print(f"\n共提取 {len(tables)} 个表格（含跨页合并）:\n")
         for idx, tbl in enumerate(tables, 1):
