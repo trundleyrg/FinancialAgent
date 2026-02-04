@@ -9,19 +9,20 @@ packages = [{include = "src"}]
 [tool.poetry.dependencies]
 python = "^3.12"
 # 数据库
-sqlalchemy = "^2.0.0"
+sqlalchemy = "2.0.46"
 psycopg2-binary = "^2.9.0"
 # PDF 处理
 pymupdf = "^1.24.0"
-pdfplumber = "^0.11.0"
+pdfplumber = "0.11.8"
 # 数据验证
-pydantic = "^2.0.0"
+pydantic = "2.12.5"
 # LangGraph / LangChain
 langgraph = "^0.2.0"
 langchain = "^0.3.0"
 langchain-openai = "^0.2.0"  # 如果使用 OpenAI
 # 工具
 python-dotenv = "^1.0.0"
+fitz = "0.0.1.dev2"
 
 [tool.poetry.group.dev.dependencies]
 # 测试
