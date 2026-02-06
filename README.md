@@ -27,6 +27,8 @@ FinancialAgent/
 ├── data/
 │   ├── raw_pdfs/             # 原始 PDF 输入目录
 │   └── output/               # 生成的 Markdown 文件存储目录
+├── script/
+│   └── init_db.py            # 数据库初始化脚本
 ├── tests/                    # 单元测试与集成测试
 ├── .env                      # 敏感信息 (API Keys, DB Credentials)
 ├── main.py                   # 程序入口，初始化 Agent 并运行
