@@ -211,17 +211,32 @@ class PDFChapterExtractor:
             i = j  # 跳过已合并的表格
         
         return merged_tables
+    
+    def extract_section_tables(self, section_title: str, section_level: int = 1) -> List[TableWithHeader]:
+        """
+        提取指定章节的所有表格
+        """
+        start_page, end_page = self.find_section_range(section_title, section_level=section_level)
+        tables = self.extract_tables_in_section(start_page, end_page)
+        return tables
 
     # 获取三大主表
-    def extract_main_tables(self) -> List[TableWithHeader]:
+    def extract_main_tables(self) -> Dict[str, Optional[TableWithHeader]]:
         """
-        获取三大主表
+        获取主要表
         """
-        # 获取三大主表
-        main_tables = {}
-        for section_title in ["合并资产负债表", "母公司资产负债表", 
-                              "合并利润表", "母公司利润表", 
-                              "合并现金流量表", "母公司现金流量表"]:
+        # 主要表情况
+        main_tables = {
+            "合并资产负债表": [3],
+            "母公司资产负债表": [3],
+            "合并利润表": [3],
+            "母公司利润表": [3],
+            "合并现金流量表": [3],
+            "母公司现金流量表": [3],
+            "股份变动情况表": [3]
+        }
+        # 首先提取六大财务报表
+        for section_title in main_tables.keys():
             tables = self.extract_section_tables(section_title, section_level=3)
             if len(tables) > 1:
                 # 当前页中找到两个以上的表格，判断表头前的文本中是否出现相关文本
@@ -237,16 +252,8 @@ class PDFChapterExtractor:
                 main_tables[section_title] = None
                 chapter_logger.info(f"未找到{section_title}表")
             else:
-                main_tables[section_title] = tables[0]
+                main_tables[section_title] = tables[0]    
         return main_tables
-
-    def extract_section_tables(self, section_title: str, section_level: int = 1) -> List[TableWithHeader]:
-        """
-        提取指定章节的所有表格
-        """
-        start_page, end_page = self.find_section_range(section_title, section_level=section_level)
-        tables = self.extract_tables_in_section(start_page, end_page)
-        return tables
 
     def close(self):
         self.doc.close()
@@ -265,10 +272,6 @@ if __name__ == "__main__":
         for idx, tbl in enumerate(tables, 1):
             status = " [跨页合并]" if tbl.is_merged else ""
             page_range = f"第 {tbl.page_start_num + 1} 页" if tbl.page_start_num == tbl.page_end_num else f"第 {tbl.page_start_num + 1}-{tbl.page_end_num + 1} 页"
-            print(f"表格 {idx}{status}:")
-            print(f"  位置: {page_range}")
-            print(f"  表头: {tbl.header_text or '（空）'}")
-            print(f"  尺寸: {len(tbl.table_data)} 行 x {len(tbl.table_data[0]) if tbl.table_data else 0} 列")
             # 打印前3行预览
             for i, row in enumerate(tbl.table_data[:3]):
                 print(f"    行{i}: {row[:5]}{'...' if len(row)>5 else ''}")
