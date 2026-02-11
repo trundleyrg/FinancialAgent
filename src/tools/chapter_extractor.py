@@ -235,7 +235,7 @@ class PDFChapterExtractor:
             "母公司现金流量表": [3],
             "股份变动情况表": [3]
         }
-        # 首先提取六大财务报表
+        # 提取主要报表
         for section_title in main_tables.keys():
             tables = self.extract_section_tables(section_title, section_level=3)
             if len(tables) > 1:
@@ -252,7 +252,7 @@ class PDFChapterExtractor:
                 main_tables[section_title] = None
                 chapter_logger.info(f"未找到{section_title}表")
             else:
-                main_tables[section_title] = tables[0]    
+                main_tables[section_title] = tables[0]   
         return main_tables
 
     def close(self):
