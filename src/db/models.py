@@ -40,6 +40,8 @@ class FinancialReport(Base):
     report_year = Column(Integer, nullable=False, index=True)  # 报告所属年份，如2023，用于查询索引
     report_period = Column(SQLEnum(ReportPeriod), nullable=False, index=True)  # 报告周期（Q1/H1/Q3/FY），用于查询索引
     
+    shares_total = Column(Float, nullable=False)  # 股份总数
+
     source_file = Column(String(500))  # 源PDF文件路径，用于追溯原始数据
     created_at = Column(DateTime, default=datetime.now)  # 记录创建时间，自动填充当前时间
     metrics = relationship("FinancialMetric", back_populates="report")  # 关联的财务指标列表

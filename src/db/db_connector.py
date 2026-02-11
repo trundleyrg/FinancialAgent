@@ -1,23 +1,41 @@
 """
-数据库操作逻辑 (使用SQLAlchemy库，数据库选择postgresql)
+数据库操作逻辑 (使用SQLAlchemy库，支持postgresql和duckdb)
 """
+import os
+from dotenv import load_dotenv
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, Session
 from typing import List, Optional, Dict, Any
 from contextlib import contextmanager
 
-from src.schema.models import Base, FinancialReport, FinancialMetric, ReportPeriod
+from src.db.models import Base, FinancialReport, FinancialMetric, ReportPeriod
+
+# 加载环境变量
+load_dotenv()
 
 
 class DatabaseConnector:
-    """数据库连接器，提供增删查改操作"""
+    """数据库连接器，提供增删查改操作，支持 PostgreSQL 和 DuckDB"""
 
-    def __init__(self, database_url: str = "postgresql://postgres:postgres@localhost:5432/financial_statements"):
+    def __init__(self, database_type: str = None, database_url: str = None):
         """
         初始化数据库连接
-        :param database_url: PostgreSQL 数据库连接字符串
-                           格式: postgresql://username:password@host:port/database
+        :param database_type: 数据库类型 ('postgresql' 或 'duckdb')，如果为 None，则从环境变量读取
+        :param database_url: 数据库连接字符串，如果为 None，则根据数据库类型使用默认值
         """
+        if database_type is None:
+            database_type = os.getenv("DATABASE", "duckdb").lower()
+        
+        if database_url is None:
+            if database_type == "postgresql":
+                database_url = os.getenv("POSTGRES_DB_URL", "postgresql://postgres:postgres@localhost:5432/financial_statements")
+            elif database_type == "duckdb":
+                database_url = os.getenv("DUCKDB_DB_PATH", "./financial_data.duckdb")
+                database_url = f"duckdb:///{database_url}"
+            else:
+                raise ValueError(f"不支持的数据库类型: {database_type}. 支持的类型: 'postgresql', 'duckdb'")
+        
+        self.database_type = database_type
         self.engine = create_engine(database_url, echo=False)
         self.SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=self.engine)
 
@@ -94,7 +112,12 @@ class DatabaseConnector:
             query = session.query(FinancialReport)
 
             if company_name:
-                query = query.filter(FinancialReport.company_name.ilike(f"%{company_name}%"))
+                if self.database_type == "postgresql":
+                    # PostgreSQL 使用 ilike 进行不区分大小写的匹配
+                    query = query.filter(FinancialReport.company_name.ilike(f"%{company_name}%"))
+                else:
+                    # DuckDB 使用 LIKE 和 UPPER 进行不区分大小写的匹配
+                    query = query.filter(FinancialReport.company_name.like(f"%{company_name.lower()}%"))
             if stock_code:
                 query = query.filter(FinancialReport.stock_code == stock_code)
             if report_year:
@@ -272,18 +295,18 @@ class DatabaseConnector:
 _db_connector: Optional[DatabaseConnector] = None
 
 
-def get_db(database_url: str = "postgresql://postgres:postgres@localhost:5432/financial_statements") -> DatabaseConnector:
+def get_db(database_type: str = None, database_url: str = None) -> DatabaseConnector:
     """获取数据库连接器单例"""
     global _db_connector
     if _db_connector is None:
-        _db_connector = DatabaseConnector(database_url)
+        _db_connector = DatabaseConnector(database_type, database_url)
         _db_connector.create_tables()
     return _db_connector
 
 
 # ============ 使用示例 ============
 if __name__ == "__main__":
-    # 创建数据库连接
+    # 创建数据库连接 - 默认使用 DuckDB
     db = get_db()
 
     # 创建测试数据

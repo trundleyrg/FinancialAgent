@@ -3,10 +3,9 @@ PostgreSQL 数据库初始化脚本
 
 功能：
 1. 创建数据库 'financial'
-2. 在数据库中创建表（基于 src/schema/models.py 中的 ORM 模型）
+2. 在数据库中创建表（基于 src/db/models.py 中的 ORM 模型）
 3. 表名使用模型类中定义的 __tablename__
 4. 列名使用模型类中定义的属性
-
 使用方法：
     python script/init_db.py
 
@@ -26,7 +25,7 @@ from dotenv import load_dotenv
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from src.utils.logger import db_logger
-from src.schema.models import Base
+from src.db.models import Base
 
 load_dotenv()
 
