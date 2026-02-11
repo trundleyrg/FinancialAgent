@@ -10,7 +10,7 @@ import json
 
 from typing import Optional
 from collections import defaultdict
-from src.schema.models import FinancialExtractionSchema, ReportPeriod
+from src.db.models import FinancialExtractionSchema, ReportPeriod
 from src.utils.logger import pdf_logger
 
 class PDFParser:

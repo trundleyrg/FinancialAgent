@@ -80,3 +80,8 @@ db_logger = manager.get_logger(
 sys_logger = manager.get_logger(
     "System", "system.log"
 )
+
+# 主程序日志
+main_logger = manager.get_logger(
+    "Main", "main.log"
+)

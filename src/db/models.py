@@ -115,9 +115,9 @@ class ConsolidatedBalanceSheet(Base):
     oil_and_gas_assets = Column(Float, comment="油气资产")  # 油气资产
     right_of_use_assets = Column(Float, comment="使用权资产")  # 使用权资产
     intangible_assets = Column(Float, comment="无形资产")  # 无形资产
-    data_resources_intangible = Column(Float, comment="其中：数据资源（无形资产）")  # 其中：数据资源
+    data_resources_intangible = Column(Float, comment="其中：数据资源")  # 其中：数据资源
     development_expenditure = Column(Float, comment="开发支出")  # 开发支出
-    data_resources_development = Column(Float, comment="其中：数据资源（开发支出）")  # 其中：数据资源
+    data_resources_development = Column(Float, comment="其中：数据资源")  # 其中：数据资源
     goodwill = Column(Float, comment="商誉")  # 商誉
     long_term_prepaid_expenses = Column(Float, comment="长期待摊费用")  # 长期待摊费用
     deferred_tax_assets = Column(Float, comment="递延所得税资产")  # 递延所得税资产
@@ -168,7 +168,7 @@ class ConsolidatedBalanceSheet(Base):
     total_liabilities = Column(Float, comment="负债合计")  # 负债合计
 
     # 所有者权益
-    paid_in_capital = Column(Float, comment="实收资本（或股本）")  # 实收资本（或股本）
+    paid_in_capital = Column(Float, comment="实收资本")  # 实收资本
     other_equity_instruments = Column(Float, comment="其他权益工具")  # 其他权益工具
     preferred_stock_equity = Column(Float, comment="其中：优先股（权益）")  # 其中：优先股
     perpetual_bonds_equity = Column(Float, comment="永续债（权益）")  # 永续债
@@ -179,10 +179,10 @@ class ConsolidatedBalanceSheet(Base):
     surplus_reserve = Column(Float, comment="盈余公积")  # 盈余公积
     general_risk_reserve = Column(Float, comment="一般风险准备")  # 一般风险准备
     retained_earnings = Column(Float, comment="未分配利润")  # 未分配利润
-    total_equity_attributable_to_parent_company = Column(Float, comment="归属于母公司所有者权益（或股东权益）合计")  # 归属于母公司所有者权益（或股东权益）合计
+    total_equity_attributable_to_parent_company = Column(Float, comment="归属于母公司所有者权益")  # 归属于母公司所有者权益
     minority_interest = Column(Float, comment="少数股东权益")  # 少数股东权益
-    total_owners_equity = Column(Float, comment="所有者权益（或股东权益）合计")  # 所有者权益（或股东权益）合计
-    total_liabilities_and_owners_equity = Column(Float, comment="负债和所有者权益（或股东权益）总计")  # 负债和所有者权益（或股东权益）总计
+    total_owners_equity = Column(Float, comment="所有者权益")  # 所有者权益
+    total_liabilities_and_owners_equity = Column(Float, comment="负债和所有者权益")  # 负债和所有者权益
 
 
 class ParentCompanyBalanceSheet(Base):
@@ -274,7 +274,7 @@ class ParentCompanyBalanceSheet(Base):
     total_liabilities = Column(Float, comment="负债合计")  # 负债合计
 
     # 所有者权益
-    paid_in_capital = Column(Float, comment="实收资本（或股本）")  # 实收资本（或股本）
+    paid_in_capital = Column(Float, comment="实收资本")  # 实收资本
     other_equity_instruments = Column(Float, comment="其他权益工具")  # 其他权益工具
     preferred_stock_equity = Column(Float, comment="其中：优先股")  # 其中：优先股
     perpetual_bonds_equity = Column(Float, comment="永续债")  # 永续债
@@ -284,8 +284,8 @@ class ParentCompanyBalanceSheet(Base):
     special_reserve = Column(Float, comment="专项储备")  # 专项储备
     surplus_reserve = Column(Float, comment="盈余公积")  # 盈余公积
     retained_earnings = Column(Float, comment="未分配利润")  # 未分配利润
-    total_owners_equity = Column(Float, comment="所有者权益（或股东权益）合计")  # 所有者权益（或股东权益）合计
-    total_liabilities_and_owners_equity = Column(Float, comment="负债和所有者权益（或股东权益）总计")  # 负债和所有者权益（或股东权益）总计
+    total_owners_equity = Column(Float, comment="所有者权益")  # 所有者权益
+    total_liabilities_and_owners_equity = Column(Float, comment="负债和所有者权益")  # 负债和所有者权益
 
 
 class ConsolidatedIncomeStatement(Base):
@@ -325,29 +325,29 @@ class ConsolidatedIncomeStatement(Base):
 
     # 其他收益与损益
     other_income = Column(Float, comment="加：其他收益")  # 加：其他收益
-    investment_income = Column(Float, comment="投资收益（损失以"-"号填列）")  # 投资收益
+    investment_income = Column(Float, comment="投资收益")  # 投资收益
     investment_income_from_associates = Column(Float, comment="其中：对联营企业和合营企业的投资收益")  # 其中：对联营企业和合营企业的投资收益
     financial_asset_derecognition_income = Column(Float, comment="以摊余成本计量的金融资产终止确认收益")  # 以摊余成本计量的金融资产终止确认收益
-    exchange_gains = Column(Float, comment="汇兑收益（损失以"-"号填列）")  # 汇兑收益
-    net_hedge_gain = Column(Float, comment="净敞口套期收益（损失以"-"号填列）")  # 净敞口套期收益
-    fair_value_change_income = Column(Float, comment="公允价值变动收益（损失以"-"号填列）")  # 公允价值变动收益
-    credit_impairment_loss = Column(Float, comment="信用减值损失（损失以"-"号填列）")  # 信用减值损失
-    asset_impairment_loss = Column(Float, comment="资产减值损失（损失以"-"号填列）")  # 资产减值损失
-    asset_disposal_income = Column(Float, comment="资产处置收益（损失以"-"号填列）")  # 资产处置收益
-    operating_profit = Column(Float, comment="三、营业利润（亏损以"-"号填列）")  # 三、营业利润
+    exchange_gains = Column(Float, comment="汇兑收益")  # 汇兑收益
+    net_hedge_gain = Column(Float, comment="净敞口套期收益")  # 净敞口套期收益
+    fair_value_change_income = Column(Float, comment="公允价值变动收益")  # 公允价值变动收益
+    credit_impairment_loss = Column(Float, comment="信用减值损失")  # 信用减值损失
+    asset_impairment_loss = Column(Float, comment="资产减值损失")  # 资产减值损失
+    asset_disposal_income = Column(Float, comment="资产处置收益")  # 资产处置收益
+    operating_profit = Column(Float, comment="三、营业利润")  # 三、营业利润
     non_operating_income = Column(Float, comment="加：营业外收入")  # 加：营业外收入
     non_operating_expenses = Column(Float, comment="减：营业外支出")  # 减：营业外支出
-    total_profit = Column(Float, comment="四、利润总额（亏损总额以"-"号填列）")  # 四、利润总额
+    total_profit = Column(Float, comment="四、利润总额")  # 四、利润总额
     income_tax_expense = Column(Float, comment="减：所得税费用")  # 减：所得税费用
-    net_profit = Column(Float, comment="五、净利润（净亏损以"-"号填列）")  # 五、净利润
+    net_profit = Column(Float, comment="五、净利润")  # 五、净利润
 
     # 按经营持续性分类
-    continuing_operation_net_profit = Column(Float, comment="1.持续经营净利润（净亏损以"-"号填列）")  # 1.持续经营净利润
-    discontinued_operation_net_profit = Column(Float, comment="2.终止经营净利润（净亏损以"-"号填列）")  # 2.终止经营净利润
+    continuing_operation_net_profit = Column(Float, comment="1.持续经营净利润")  # 1.持续经营净利润
+    discontinued_operation_net_profit = Column(Float, comment="2.终止经营净利润")  # 2.终止经营净利润
 
     # 按所有权归属分类
-    net_profit_attributable_to_parent = Column(Float, comment="1.归属于母公司股东的净利润（净亏损以"-"号填列）")  # 1.归属于母公司股东的净利润
-    minority_interest_net_profit = Column(Float, comment="2.少数股东损益（净亏损以"-"号填列）")  # 2.少数股东损益
+    net_profit_attributable_to_parent = Column(Float, comment="1.归属于母公司股东的净利润")  # 1.归属于母公司股东的净利润
+    minority_interest_net_profit = Column(Float, comment="2.少数股东损益")  # 2.少数股东损益
 
     # 其他综合收益
     other_comprehensive_income_after_tax = Column(Float, comment="六、其他综合收益的税后净额")  # 六、其他综合收益的税后净额
@@ -400,22 +400,22 @@ class ParentCompanyIncomeStatement(Base):
 
     # 其他收益与损益
     other_income = Column(Float, comment="加：其他收益")  # 加：其他收益
-    investment_income = Column(Float, comment="投资收益（损失以"-"号填列）")  # 投资收益
+    investment_income = Column(Float, comment="投资收益")  # 投资收益
     investment_income_from_associates = Column(Float, comment="其中：对联营企业和合营企业的投资收益")  # 其中：对联营企业和合营企业的投资收益
     financial_asset_derecognition_income = Column(Float, comment="以摊余成本计量的金融资产终止确认收益")  # 以摊余成本计量的金融资产终止确认收益
-    net_hedge_gain = Column(Float, comment="净敞口套期收益（损失以"-"号填列）")  # 净敞口套期收益
-    fair_value_change_income = Column(Float, comment="公允价值变动收益（损失以"-"号填列）")  # 公允价值变动收益
-    credit_impairment_loss = Column(Float, comment="信用减值损失（损失以"-"号填列）")  # 信用减值损失
-    asset_impairment_loss = Column(Float, comment="资产减值损失（损失以"-"号填列）")  # 资产减值损失
-    asset_disposal_income = Column(Float, comment="资产处置收益（损失以"-"号填列）")  # 资产处置收益
-    operating_profit = Column(Float, comment="二、营业利润（亏损以"-"号填列）")  # 二、营业利润
+    net_hedge_gain = Column(Float, comment="净敞口套期收益")  # 净敞口套期收益
+    fair_value_change_income = Column(Float, comment="公允价值变动收益")  # 公允价值变动收益
+    credit_impairment_loss = Column(Float, comment="信用减值损失")  # 信用减值损失
+    asset_impairment_loss = Column(Float, comment="资产减值损失")  # 资产减值损失
+    asset_disposal_income = Column(Float, comment="资产处置收益")  # 资产处置收益
+    operating_profit = Column(Float, comment="二、营业利润")  # 二、营业利润
     non_operating_income = Column(Float, comment="加：营业外收入")  # 加：营业外收入
     non_operating_expenses = Column(Float, comment="减：营业外支出")  # 减：营业外支出
-    total_profit = Column(Float, comment="三、利润总额（亏损总额以"-"号填列）")  # 三、利润总额
+    total_profit = Column(Float, comment="三、利润总额")  # 三、利润总额
     income_tax_expense = Column(Float, comment="减：所得税费用")  # 减：所得税费用
-    net_profit = Column(Float, comment="四、净利润（净亏损以"-"号填列）")  # 四、净利润
-    continuing_operation_net_profit = Column(Float, comment="（一）持续经营净利润（净亏损以"-"号填列）")  # （一）持续经营净利润
-    discontinued_operation_net_profit = Column(Float, comment="（二）终止经营净利润（净亏损以"-"号填列）")  # （二）终止经营净利润
+    net_profit = Column(Float, comment="四、净利润")  # 四、净利润
+    continuing_operation_net_profit = Column(Float, comment="（一）持续经营净利润")  # （一）持续经营净利润
+    discontinued_operation_net_profit = Column(Float, comment="（二）终止经营净利润")  # （二）终止经营净利润
 
     # 其他综合收益
     other_comprehensive_income_after_tax = Column(Float, comment="五、其他综合收益的税后净额")  # 五、其他综合收益的税后净额
