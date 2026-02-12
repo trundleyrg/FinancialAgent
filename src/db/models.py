@@ -4,7 +4,7 @@
 from typing import Optional, List
 from datetime import datetime
 from enum import Enum
-from sqlalchemy import Column, Integer, String, Float, DateTime, Text, ForeignKey, Enum as SQLEnum
+from sqlalchemy import Column, Integer, BigInteger, String, Float, DateTime, Text, ForeignKey, Enum as SQLEnum
 from sqlalchemy.orm import declarative_base, relationship
 from pydantic import BaseModel, Field, field_validator
 
@@ -32,7 +32,7 @@ class FinancialReport(Base):
     """
     __tablename__ = 'financial_reports'
     
-    id = Column(Integer, primary_key=True, autoincrement=True)  # 报告唯一标识符，自增主键
+    id = Column(BigInteger, primary_key=True)  # 指标唯一标识符，主键
     company_name = Column(String(255), nullable=False, index=True)  # 公司全名，用于查询索引
     stock_code = Column(String(20), nullable=False, index=True)  # 股票代码，用于查询索引
     
@@ -52,7 +52,7 @@ class FinancialMetric(Base):
     用于存储从财务报告中提取的具体财务数据指标
     """
     __tablename__ = 'financial_metrics'
-    id = Column(Integer, primary_key=True, autoincrement=True)  # 指标唯一标识符，自增主键
+    id = Column(BigInteger, primary_key=True)  # 指标唯一标识符，主键
     report_id = Column(Integer, ForeignKey('financial_reports.id'))  # 外键，关联到财务报告
     metric_name = Column(String(100), nullable=False)  # 指标名称，如"营业收入"、"净利润"等
     value = Column(Float, nullable=False)  # 指标的具体数值
@@ -191,7 +191,7 @@ class ParentCompanyBalanceSheet(Base):
     用于存储母公司资产负债表的所有财务指标
     """
     __tablename__ = 'parent_company_balance_sheet'
-    id = Column(Integer, primary_key=True, autoincrement=True)
+    id = Column(BigInteger, primary_key=True)
     company_name = Column(String(255), nullable=False, index=True)
     stock_code = Column(String(20), nullable=False, index=True)
     report_year = Column(Integer, nullable=False, index=True)
@@ -294,7 +294,7 @@ class ConsolidatedIncomeStatement(Base):
     用于存储合并利润表的所有财务指标
     """
     __tablename__ = 'consolidated_income_statement'
-    id = Column(Integer, primary_key=True, autoincrement=True)
+    id = Column(BigInteger, primary_key=True)
     company_name = Column(String(255), nullable=False, index=True)
     stock_code = Column(String(20), nullable=False, index=True)
     report_year = Column(Integer, nullable=False, index=True)
@@ -381,7 +381,7 @@ class ParentCompanyIncomeStatement(Base):
     用于存储母公司利润表的所有财务指标
     """
     __tablename__ = 'parent_company_income_statement'
-    id = Column(Integer, primary_key=True, autoincrement=True)
+    id = Column(BigInteger, primary_key=True)
     company_name = Column(String(255), nullable=False, index=True)
     stock_code = Column(String(20), nullable=False, index=True)
     report_year = Column(Integer, nullable=False, index=True)
@@ -443,7 +443,7 @@ class ConsolidatedCashFlowStatement(Base):
     用于存储合并现金流量表的所有财务指标
     """
     __tablename__ = 'consolidated_cash_flow_statement'
-    id = Column(Integer, primary_key=True, autoincrement=True)
+    id = Column(BigInteger, primary_key=True)
     company_name = Column(String(255), nullable=False, index=True)
     stock_code = Column(String(20), nullable=False, index=True)
     report_year = Column(Integer, nullable=False, index=True)
@@ -518,7 +518,7 @@ class ParentCompanyCashFlowStatement(Base):
     用于存储母公司现金流量表的所有财务指标
     """
     __tablename__ = 'parent_company_cash_flow_statement'
-    id = Column(Integer, primary_key=True, autoincrement=True)
+    id = Column(BigInteger, primary_key=True)
     company_name = Column(String(255), nullable=False, index=True)
     stock_code = Column(String(20), nullable=False, index=True)
     report_year = Column(Integer, nullable=False, index=True)
