@@ -10,7 +10,12 @@ packages = [{include = "src"}]
 python = "^3.12"
 # 数据库
 sqlalchemy = "2.0.46"
-psycopg2-binary = "^2.9.0"
+psycopg2-binary = "2.9.11"
+duckdb = "1.4.4"
+duckdb-engine = "0.17.0"
+# 数据处理和导出
+pandas = "3.0.0"
+openpyxl = "^3.1.0"
 # PDF 处理
 pymupdf = "^1.24.0"
 pdfplumber = "0.11.8"
@@ -20,9 +25,12 @@ pydantic = "2.12.5"
 langgraph = "^0.2.0"
 langchain = "^0.3.0"
 langchain-openai = "^0.2.0"  # 如果使用 OpenAI
+# UI
+gradio = "6.5.1"
 # 工具
-python-dotenv = "^1.0.0"
+python-dotenv = "1.2.1"
 fitz = "0.0.1.dev2"
+psycopg2 = "2.9.11"
 
 [tool.poetry.group.dev.dependencies]
 # 测试
