@@ -4,6 +4,7 @@ table_data_saver.py
 """
 
 import duckdb
+import pandas as pd
 from typing import List, Dict, Any, Optional
 from src.utils.logger import db_logger
 import os
@@ -29,10 +30,17 @@ class TableDataSaver:
     
     def _create_tables(self):
         """创建表格数据存储表"""
+        # 创建序列（用于自增 ID）
+        try:
+            self.conn.execute("CREATE SEQUENCE IF NOT EXISTS extracted_tables_id_seq")
+            self.conn.execute("CREATE SEQUENCE IF NOT EXISTS table_data_id_seq")
+        except Exception:
+            pass  # 序列可能已存在
+
         # 创建财务报表主表
         self.conn.execute("""
             CREATE TABLE IF NOT EXISTS extracted_tables (
-                id INTEGER PRIMARY KEY AUTO_INCREMENT,
+                id INTEGER PRIMARY KEY DEFAULT nextval('extracted_tables_id_seq'),
                 table_name VARCHAR,
                 header_text VARCHAR,
                 page_start INTEGER,
@@ -44,11 +52,11 @@ class TableDataSaver:
                 extracted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        
+
         # 创建表格数据详情表
         self.conn.execute("""
             CREATE TABLE IF NOT EXISTS table_data (
-                id INTEGER PRIMARY KEY AUTO_INCREMENT,
+                id INTEGER PRIMARY KEY DEFAULT nextval('table_data_id_seq'),
                 table_id INTEGER,
                 row_index INTEGER,
                 col_index INTEGER,
@@ -99,6 +107,80 @@ class TableDataSaver:
                     """, [table_id, row_idx, col_idx, str(cell_value)])
             
             db_logger.info(f"已保存表格数据: {table_name}, ID: {table_id}, 共 {len(table_obj.table_data)} 行")
+
+    def export_table_to_excel(self, table_obj: Any, table_name: str, output_dir: str = "./data/output/excel") -> Optional[str]:
+        """
+        将单个表格对象导出为 Excel 文件
+        :param table_obj: TableWithHeader 对象
+        :param table_name: 表格名称（用于文件名）
+        :param output_dir: 输出目录
+        :return: 导出的文件路径，如果失败返回 None
+        """
+        try:
+            # 创建输出目录
+            os.makedirs(output_dir, exist_ok=True)
+
+            # 将表格数据转换为 DataFrame
+            if table_obj is None or not table_obj.table_data:
+                db_logger.warning(f"表格 {table_name} 数据为空，跳过导出")
+                return None
+
+            # 清理文件名（移除非法字符）
+            safe_table_name = table_name.replace("/", "_").replace("\\", "_").replace(":", "_")
+            excel_file = os.path.join(output_dir, f"{safe_table_name}.xlsx")
+
+            # 创建 DataFrame
+            df = pd.DataFrame(table_obj.table_data)
+
+            # 导出到 Excel
+            with pd.ExcelWriter(excel_file, engine='openpyxl') as writer:
+                df.to_excel(writer, sheet_name=table_name[:31], index=False)  # Excel sheet name max 31 chars
+
+                # 添加元数据 sheet
+                metadata = pd.DataFrame([{
+                    '表名': table_name,
+                    '表头文本': table_obj.header_text,
+                    '起始页': table_obj.page_start_num,
+                    '结束页': table_obj.page_end_num,
+                    '是否跨页合并': table_obj.is_merged,
+                    '行数': len(table_obj.table_data),
+                    '列数': len(table_obj.table_data[0]) if table_obj.table_data else 0
+                }])
+                metadata.to_excel(writer, sheet_name='元数据', index=False)
+
+            db_logger.info(f"表格 {table_name} 已导出到 {excel_file}")
+            return excel_file
+
+        except Exception as e:
+            db_logger.error(f"导出表格 {table_name} 到 Excel 失败: {e}")
+            return None
+
+    def export_all_tables_to_excel(self, main_tables: Dict[str, Any], company_name: str,
+                                   report_year: int, output_dir: str = "./data/output/excel") -> List[str]:
+        """
+        将所有提取的表格导出为 Excel 文件
+        :param main_tables: 从 extract_main_tables 返回的表格字典
+        :param company_name: 公司名称
+        :param report_year: 报告年份
+        :param output_dir: 输出目录
+        :return: 导出的文件路径列表
+        """
+        # 创建带公司名称和年份的子目录
+        specific_dir = os.path.join(output_dir, f"{company_name}_{report_year}")
+        os.makedirs(specific_dir, exist_ok=True)
+
+        exported_files = []
+        for table_name, table_obj in main_tables.items():
+            if table_obj is None:
+                db_logger.info(f"跳过空表格: {table_name}")
+                continue
+
+            excel_file = self.export_table_to_excel(table_obj, table_name, specific_dir)
+            if excel_file:
+                exported_files.append(excel_file)
+
+        db_logger.info(f"共导出 {len(exported_files)} 个 Excel 文件到 {specific_dir}")
+        return exported_files
     
     def get_table_by_name(self, table_name: str, company_name: str, report_year: int, report_period: str) -> List[Dict[str, Any]]:
         """
@@ -181,3 +263,37 @@ def save_tables_to_db(main_tables: Dict[str, Any], company_name: str, report_yea
     """
     with TableDataSaver(db_path) as saver:
         saver.save_extracted_tables(main_tables, company_name, report_year, report_period)
+
+
+def export_tables_to_excel(main_tables: Dict[str, Any], company_name: str, report_year: int,
+                          output_dir: str = "./data/output/excel") -> List[str]:
+    """
+    便捷函数：将提取的表格数据导出为 Excel 文件
+    :param main_tables: 从 extract_main_tables 返回的表格字典
+    :param company_name: 公司名称
+    :param report_year: 报告年份
+    :param output_dir: 输出目录
+    :return: 导出的文件路径列表
+    """
+    with TableDataSaver() as saver:
+        return saver.export_all_tables_to_excel(main_tables, company_name, report_year, output_dir)
+
+
+def save_and_export_tables(main_tables: Dict[str, Any], company_name: str, report_year: int,
+                          report_period: str, db_path: Optional[str] = None,
+                          output_dir: str = "./data/output/excel") -> List[str]:
+    """
+    便捷函数：将提取的表格数据保存到数据库并导出为 Excel 文件
+    :param main_tables: 从 extract_main_tables 返回的表格字典
+    :param company_name: 公司名称
+    :param report_year: 报告年份
+    :param report_period: 报告期间
+    :param db_path: DuckDB 数据库路径
+    :param output_dir: Excel 输出目录
+    :return: 导出的文件路径列表
+    """
+    with TableDataSaver(db_path) as saver:
+        # 保存到数据库
+        saver.save_extracted_tables(main_tables, company_name, report_year, report_period)
+        # 导出到 Excel
+        return saver.export_all_tables_to_excel(main_tables, company_name, report_year, output_dir)
