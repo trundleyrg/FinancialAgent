@@ -8,6 +8,7 @@ __pycache__/
 
 # doc
 *.pdf
+*.duckdb
 data/output/
 
 # Distribution / packaging

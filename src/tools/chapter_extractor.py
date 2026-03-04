@@ -1,25 +1,14 @@
 """
-chapter_extractor.py     # [+] 专门负责识别和提取 PDF 指定章节
+chapter_extractor.py     # 负责识别和提取 PDF 指定章节
 
 使用fitz.open().get_toc()的方式定位章节位置和表格关系。
 """
 
 import fitz  # PyMuPDF
-import re
 from typing import List, Tuple, Dict, Optional
-from dataclasses import dataclass
 
 from src.utils.logger import chapter_logger
-
-@dataclass
-class TableWithHeader:
-    """表格与表头的关联结构"""
-    table_data: List[List[str]]  # 表格数据：二维列表
-    header_text: str             # 关联的表头文本
-    page_start_num: int          # 表格起始页码
-    page_end_num: int            # 表格结束页码
-    bbox: Tuple[float, float, float, float]  # 表格位置 (x0, y0, x1, y1)
-    is_merged: bool = False      # 是否为跨页合并表格
+from src.db.table_models import TableWithHeader
 
 class PDFChapterExtractor:
     def __init__(self, pdf_path: str):
@@ -27,9 +16,9 @@ class PDFChapterExtractor:
         self.toc = self.doc.get_toc()
         self.page_heights = [page.rect.height for page in self.doc]
         
-    def find_section_range(self, section_title: str, section_level: int=1) -> Tuple[int, int]:
+    def find_section_range(self, section_title: str, section_level: int=None) -> Tuple[int, int]:
         """
-        定位章节页码范围
+        定位章节页码范围, 支持不指定section_level的模糊匹配。
         :param section_title: 目标章节标题（支持正则）
         :param next_section_pattern: 下一章节标题模式（用于确定结束页）
         :return: (起始页, 结束页) 页码从0开始
@@ -39,9 +28,15 @@ class PDFChapterExtractor:
         
         # 查找起始页
         for index, entry in enumerate(self.toc):
-            if entry[0] == section_level and section_title in entry[1]:
+            if section_level is None and section_title in entry[1]:
+                start_page = entry[2] - 1
+                section_level = entry[0]  # 没有给定section_level时，启用模糊查找
+                break
+            elif entry[0] == section_level and section_title in entry[1]:
                 start_page = entry[2] - 1
                 break
+        if section_level is None:
+            raise ValueError(f"文档中查找不到章节: {section_title}")
         toc_list = self.toc[index:]
         # 在start_page之后，寻找下一个entry[0]==1的页数
         for index in range(1, len(toc_list)):
@@ -260,7 +255,7 @@ class PDFChapterExtractor:
 
 # ============ 使用示例 ============
 if __name__ == "__main__":
-    pdf_file = "./data/raw_pdfs/22.佰仁医疗2024年年报.pdf"
+    pdf_file = "./data/raw_pdfs/佰仁医疗_2024.pdf"
     section_title = r"财务报告"  # 支持正则匹配
     next_section_pattern = r"第十一节"  # 可选：用于精确定位结束页
     
