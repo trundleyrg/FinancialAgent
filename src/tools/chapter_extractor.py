@@ -216,7 +216,6 @@ class PDFChapterExtractor:
         tables = self.extract_tables_in_section(start_page, end_page)
         return tables
 
-    # 获取三大主表
     def extract_main_tables(self) -> Dict[str, Optional[TableWithHeader]]:
         """
         获取主要表
@@ -253,23 +252,3 @@ class PDFChapterExtractor:
 
     def close(self):
         self.doc.close()
-
-# ============ 使用示例 ============
-if __name__ == "__main__":
-    pdf_file = "./data/raw_pdfs/佰仁医疗_2024.pdf"
-    section_title = r"财务报告"  # 支持正则匹配
-    next_section_pattern = r"第十一节"  # 可选：用于精确定位结束页
-    
-    extractor = PDFChapterExtractor(pdf_file)
-    try:
-        tables = extractor.extract_main_tables()
-        
-        print(f"\n共提取 {len(tables)} 个表格（含跨页合并）:\n")
-        for idx, tbl in enumerate(tables, 1):
-            status = " [跨页合并]" if tbl.is_merged else ""
-            page_range = f"第 {tbl.page_start_num + 1} 页" if tbl.page_start_num == tbl.page_end_num else f"第 {tbl.page_start_num + 1}-{tbl.page_end_num + 1} 页"
-            # 打印前3行预览
-            for i, row in enumerate(tbl.table_data[:3]):
-                print(f"    行{i}: {row[:5]}{'...' if len(row)>5 else ''}")
-    finally:
-        extractor.close()
