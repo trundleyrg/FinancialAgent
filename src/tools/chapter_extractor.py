@@ -85,6 +85,7 @@ class PDFChapterExtractor:
                     })
         except Exception as e:
             print(f"页面 {page_num} 表格提取失败: {e}")
+            raise e
         
         # 按y坐标排序文本块（从上到下）
         text_blocks.sort(key=lambda b: b["y_top"])
