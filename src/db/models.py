@@ -34,6 +34,7 @@ class FinancialReport(Base):
     
     id = Column(BigInteger, primary_key=True)  # 指标唯一标识符，主键
     company_name = Column(String(255), nullable=False, index=True)  # 公司全名，用于查询索引
+    company_short_name = Column(String(255), nullable=False)   # 公司简称，用于查询索引
     stock_code = Column(String(20), nullable=False, index=True)  # 股票代码，用于查询索引
     
     # 年份 + 周期 共同定义时间点

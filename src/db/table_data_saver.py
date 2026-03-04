@@ -35,7 +35,8 @@ class TableDataSaver:
             self.conn.execute("CREATE SEQUENCE IF NOT EXISTS extracted_tables_id_seq")
             self.conn.execute("CREATE SEQUENCE IF NOT EXISTS table_data_id_seq")
         except Exception:
-            pass  # 序列可能已存在
+            db_logger.error("创建序列时出错")
+            raise
 
         # 创建财务报表主表
         self.conn.execute("""
@@ -80,7 +81,6 @@ class TableDataSaver:
                 db_logger.info(f"跳过空表格: {table_name}")
                 continue
                 
-            # 插入表格主记录
             table_id = self.conn.execute("""
                 INSERT INTO extracted_tables 
                 (table_name, header_text, page_start, page_end, is_merged, company_name, report_year, report_period)

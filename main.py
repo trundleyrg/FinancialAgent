@@ -12,66 +12,102 @@ from src.db.table_data_saver import save_tables_to_db
 from src.utils.logger import main_logger
 
 
-def extract_year_from_filename(filename: str) -> int:
+def get_company_info(pdf_path: str):
     """
-    从文件名中提取年份信息
-    :param filename: PDF 文件名
-    :return: 年份
+    从PDF文档第一页中提取公司名称、公司代码和年份
+    :param pdf_path: PDF 文件路径
+    :return: tuple of (company_name, company_code, year)
     """
-    # 尝试多种年份提取模式
-    patterns = [
-        r'(\d{4})年',      # 匹配 "2024年"
-        r'(\d{4})年报',     # 匹配 "2024年报"
-        r'(\d{4})',        # 匹配 "2024"
-        r'(\d{2})年',      # 匹配 "24年"
-        r'(\d{2})年报'      # 匹配 "24年报"
-    ]
+    # 打开PDF文档并读取第一页
+    doc = fitz.open(pdf_path)
+    page = doc[0]  # 第一页
+    text = page.get_text()
+    lines = text.split('\n')
     
-    for pattern in patterns:
-        match = re.search(pattern, filename)
+    company_name = ""
+    company_short_name = ""
+    company_code = ""
+    year = 0
+    
+    # 查找公司名称
+    for line in lines:
+        line = line.strip()
+        
+        # 查找公司名称，通常包含"股份有限公司"或"有限公司"
+        if "股份有限公司" in line or "有限公司" in line:
+            company_name = line.strip()
+            match = re.search(r'(.+?(?:股份有限公司|有限公司))', line)
+            if match:
+                company_name = match.group(1).strip()
+            break
+        elif "公司" in line and ("有限" in line or "股份" in line):
+            company_name = line.strip()
+            break
+    
+    # 查找公司简称
+    for line in lines:
+        line = line.strip()
+        # 匹配"公司简称"、"股票代码"、"证券代码"等
+        match = re.search(r'(?:公司简称)[:：\s]*([^0-9]+)', line)
         if match:
-            year = int(match.group(1))
-            # 如果是两位数年份，转换为四位数
-            if year < 100:
-                year = 2000 + year if year < 50 else 1900 + year
-            return year
+            company_short_name = match.group(1).strip()
+            break
     
-    # 如果没有找到年份，使用当前年份
-    import datetime
-    return datetime.datetime.now().year
-
-
-def extract_company_name_from_filename(filename: str) -> str:
-    """
-    从文件名中提取公司名称
-    :param filename: PDF 文件名
-    :return: 公司名称
-    """
-    # 去除扩展名
-    name = Path(filename).stem
+    # 查找公司代码，通常在文档中以"证券代码"、"股票代码"等形式出现
+    for line in lines:
+        line = line.strip()
+        # 匹配证券代码、股票代码等
+        code_matches = re.search(r'(?:证券代码|股票代码|代码)[:：\s]*([0-9]{6})', line)
+        if code_matches:
+            company_code = code_matches.group(1)
+            break
+        # 也可能在公司名称附近直接出现6位数字代码
+        if company_name and company_name in line:
+            nearby_lines = [line]
+            line_idx = lines.index(line)
+            if line_idx > 0:
+                nearby_lines.append(lines[line_idx - 1])
+            if line_idx < len(lines) - 1:
+                nearby_lines.append(lines[line_idx + 1])
+            
+            for near_line in nearby_lines:
+                code_match = re.search(r'([0-9]{6})', near_line)
+                if code_match and code_match.group(1) != '000000':  # 排除无效代码
+                    company_code = code_match.group(1)
+                    break
+            if company_code:
+                break
     
-    # 移除序号和年份等信息，保留公司名称
-    # 例如: "22.佰仁医疗2024年年报.pdf" -> "佰仁医疗"
-    patterns = [
-        r'^\d+\.(.*?)\d{4}年',  # 匹配 "序号.公司名年份年"
-        r'^\d+\.(.*?)\d{4}年报', # 匹配 "序号.公司名年份年报"
-        r'^\d+\.(.*?)\d{2}年',  # 匹配 "序号.公司名年份年" (两位年份)
-        r'^\d+\.(.*?)\d{2}年报', # 匹配 "序号.公司名年份年报" (两位年份)
-        r'(.*?)(?:\d{4}|年)',    # 匹配 "公司名年份" 或 "公司名年"
-    ]
+    # 从标题中提取年份，寻找年报中的年份信息
+    for line in lines:
+        line = line.strip()
+        if "年度报告" in line or "年报" in line:
+            year_match = re.search(r'(\d{4})', line)
+            if year_match:
+                year = int(year_match.group(1))
+                break
     
-    for pattern in patterns:
-        match = re.search(pattern, name)
-        if match:
-            company_name = match.group(1).strip()
-            return company_name
+    # 确定报告期间
+    report_period = None
+    for line in lines:
+        if '年度报告' in text or '年报' in text:
+            report_period = 'FY'
+        elif '三季报' in text or '第三季度报告' in text:
+            report_period = 'Q3'
+        elif '半年报' in text or '中报' in text or '半年度报告' in text:
+            report_period = 'H1'
+        elif '一季报' in text or '第一季度报告' in text:
+            report_period = 'Q1'
+        elif '半年度财务报告' in text:
+            report_period = 'H1'
+        elif '年度财务报告' in text:
+            report_period = 'FY'
+        if report_period is not None:
+            break
     
-    # 如果没有匹配，返回原始名称（去除序号）
-    match = re.match(r'^\d+\.(.*)', name)
-    if match:
-        return match.group(1).strip()
+    doc.close()
     
-    return name
+    return company_name, company_short_name, company_code, year, report_period
 
 
 def process_pdf_file(pdf_path: str):
@@ -80,25 +116,12 @@ def process_pdf_file(pdf_path: str):
     :param pdf_path: PDF 文件路径
     """
     filename = os.path.basename(pdf_path)
-    
-    # 从文件名提取公司名称和年份
-    company_name = extract_company_name_from_filename(filename)
-    report_year = extract_year_from_filename(filename)
-    
-    # 确定报告期间
-    if '年报' in filename:
-        report_period = 'FY'
-    elif '三季报' in filename:
-        report_period = 'Q3'
-    elif '半年报' in filename or '中报' in filename:
-        report_period = 'H1'
-    elif '一季报' in filename:
-        report_period = 'Q1'
-    else:
-        report_period = 'FY'  # 默认年报
-    
     main_logger.info(f"正在处理文件: {filename}")
-    main_logger.info(f"公司名称: {company_name}, 年份: {report_year}, 期间: {report_period}")
+    
+    # 从PDF第一页提取公司名称、公司代码和年份
+    company_name, company_short_name, company_code, report_year, report_period = get_company_info(pdf_path)
+    
+    main_logger.info(f"公司名称: {company_name}, 公司代码: {company_code}, 公司简称： {company_short_name}, 年份: {report_year}, 期间: {report_period}")
     
     # 使用 PDFChapterExtractor 提取主要表格
     extractor = PDFChapterExtractor(pdf_path)
