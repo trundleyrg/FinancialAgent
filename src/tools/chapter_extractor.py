@@ -94,7 +94,6 @@ class PDFChapterExtractor:
         return text_blocks, tables
 
     def associate_header_with_table(self, text_blocks: List[Dict], table: Dict, 
-                                   page_height: float, 
                                    header_search_range: float = 80.0) -> str:
         """
         为表格关联最近的表头文本
@@ -205,6 +204,31 @@ class PDFChapterExtractor:
                     break
             merged_tables.append(current)
             i = j  # 跳过已合并的表格
+        
+        if start_page == merged_tables[0].page_start_num - 1:
+            # 第一个表的表头在start_page页的底部
+            # 从start_page页提取文本块
+            text_blocks, _ = self.extract_page_elements(start_page)
+            
+            # 获取最后5个非空的行
+            bottom_text_blocks = []
+            len_i = 10
+            for i in range(len(text_blocks) - 1, -1, -1):
+                block = text_blocks[i]["text"]
+                if block != "":
+                    bottom_text_blocks.append(block)
+                    len_i -= 1
+                if len_i == 0:
+                    break
+            
+            # 按Y坐标排序，从下到上
+            bottom_text_blocks = bottom_text_blocks[::-1]
+            
+            # 组合表头文本
+            if bottom_text_blocks:
+                new_header_text = "\n".join(bottom_text_blocks)  # 使用最后3个文本块
+                # 更新第一个表格的表头
+                merged_tables[0].header_text = new_header_text + merged_tables[0].header_text
         
         return merged_tables
     
