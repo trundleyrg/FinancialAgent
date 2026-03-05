@@ -1,6 +1,7 @@
 """
 table_data_saver.py
 将从 PDF 提取的表格数据保存到 DuckDB 数据库中
+使用Peewee ORM进行数据存储
 """
 
 import duckdb
