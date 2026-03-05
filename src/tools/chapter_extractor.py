@@ -63,6 +63,8 @@ class PDFChapterExtractor:
             if block["type"] == 0:  # text block
                 for line in block["lines"]:
                     for span in line["spans"]:
+                        if span["text"].strip() == "":
+                            continue
                         text_blocks.append({
                             "text": span["text"].strip(),
                             "bbox": span["bbox"],  # (x0, y0, x1, y1)
@@ -210,7 +212,7 @@ class PDFChapterExtractor:
             # 从start_page页提取文本块
             text_blocks, _ = self.extract_page_elements(start_page)
             
-            # 获取最后5个非空的行
+            # 获取最后10个非空的行
             bottom_text_blocks = []
             len_i = 10
             for i in range(len(text_blocks) - 1, -1, -1):
