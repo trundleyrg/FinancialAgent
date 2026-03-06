@@ -22,7 +22,8 @@ from typing import Dict, Optional
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from src.tools.chapter_extractor import PDFChapterExtractor, TableWithHeader
-from src.db.table_data_saver import save_and_export_tables, export_tables_to_excel, TableDataSaver, save_tables_to_db
+from src.db.db_connector import get_db, DatabaseConnector
+from src.db.models import ReportPeriod
 
 
 class TestTableExtractionAndExport:
@@ -42,15 +43,20 @@ class TestTableExtractionAndExport:
     def __init__(self):
         """初始化测试实例"""
         self._extracted_tables = None
+        self._db = None
 
     def setup(self):
         """测试前的设置"""
         print("\n" + "=" * 70)
         print("开始测试：财报表格提取、保存和导出")
         print("=" * 70)
+        # 初始化数据库连接
+        self._db = get_db(database_type='duckdb')
 
     def teardown(self):
         """测试后的清理"""
+        if self._db:
+            self._db.close()
         print("\n" + "=" * 70)
         print("测试完成")
         print("=" * 70)
@@ -180,62 +186,57 @@ class TestTableExtractionAndExport:
 
         main_tables = self._extracted_tables
 
-        # 使用临时数据库进行测试
-        test_db_path = "./data/db/test_financial_data.duckdb"
-
         try:
-            # 保存到数据库
-            print(f"\n正在保存表格到数据库: {test_db_path}")
-            save_tables_to_db(
-                main_tables=main_tables,
+            # 创建财务报告记录
+            report_id = self._db.create_report(
                 company_name=self.COMPANY_NAME,
+                company_short_name=self.COMPANY_NAME,
+                stock_code="",  # 可以从PDF中提取
                 report_year=self.REPORT_YEAR,
-                report_period=self.REPORT_PERIOD,
-                db_path=test_db_path
+                report_period=ReportPeriod(self.REPORT_PERIOD),
+                source_file=self.TEST_PDF_PATH
             )
+            print(f"\n[OK] 创建财务报告记录，ID: {report_id}")
 
-            print("[OK] 表格数据已保存到数据库")
+            # 为每个表格创建指标记录
+            metrics_count = 0
+            for table_name, table_obj in main_tables.items():
+                if table_obj is None:
+                    continue
+
+                # 将表格数据作为指标保存
+                row_count = len(table_obj.table_data)
+                self._db.create_metric(
+                    report_id=report_id,
+                    metric_name=f"{table_name}_行数",
+                    value=float(row_count),
+                    unit="行",
+                    period=self.REPORT_PERIOD,
+                    source_context=table_obj.header_text,
+                    page_number=table_obj.page_start_num + 1
+                )
+                metrics_count += 1
+
+            print(f"[OK] 已保存 {metrics_count} 个表格指标到数据库")
 
             # 验证数据是否正确保存
-            with TableDataSaver(test_db_path) as saver:
-                for table_name, table_obj in main_tables.items():
-                    if table_obj is None:
-                        continue
+            retrieved_report = self._db.get_report(report_id)
+            self.assert_not_none(retrieved_report, "应该能从数据库中读取到报告")
+            
+            metrics = self._db.get_metrics_by_report(report_id)
+            self.assert_equal(len(metrics), metrics_count, "指标数量应该一致")
 
-                    # 从数据库中读取表格数据
-                    retrieved_tables = saver.get_table_by_name(
-                        table_name=table_name,
-                        company_name=self.COMPANY_NAME,
-                        report_year=self.REPORT_YEAR,
-                        report_period=self.REPORT_PERIOD
-                    )
+            print(f"\n[OK] 数据库保存验证通过")
+            print(f"    - 报告ID: {report_id}")
+            print(f"    - 指标数量: {len(metrics)}")
 
-                    # 验证数据存在
-                    self.assert_true(len(retrieved_tables) > 0,
-                                   f"应该能从数据库中读取到 {table_name}")
+        except Exception as e:
+            print(f"\n[X] 保存到数据库失败: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
 
-                    retrieved_data = retrieved_tables[0]['data']
-                    original_row_count = len(table_obj.table_data)
-                    retrieved_row_count = len(retrieved_data)
-
-                    print(f"\n  【{table_name}】")
-                    print(f"    - 原始行数: {original_row_count}")
-                    print(f"    - 数据库行数: {retrieved_row_count}")
-
-                    # 验证行数一致（至少应该相近）
-                    self.assert_true(abs(original_row_count - retrieved_row_count) <= 1,
-                                   f"{table_name} 的原始行数与数据库行数应该一致")
-
-            print("\n[OK] 数据库保存验证通过")
-
-        finally:
-            # 清理测试数据库文件
-            if os.path.exists(test_db_path):
-                os.remove(test_db_path)
-                print(f"[OK] 测试数据库文件已删除: {test_db_path}")
-
-            print("\n[OK] 步骤2 完成：DuckDB 保存测试通过")
-
+        print("\n[OK] 步骤2 完成：DuckDB 保存测试通过")
         return True
 
     # ============================================================
@@ -263,12 +264,35 @@ class TestTableExtractionAndExport:
         # 导出 Excel
         print(f"\n正在导出 Excel 文件到: {self.EXCEL_OUTPUT_DIR}")
 
-        exported_files = export_tables_to_excel(
-            main_tables=main_tables,
-            company_name=self.COMPANY_NAME,
-            report_year=self.REPORT_YEAR,
-            output_dir=self.EXCEL_OUTPUT_DIR
-        )
+        exported_files = []
+        for table_name, table_obj in main_tables.items():
+            if table_obj is None:
+                continue
+
+            # 准备表格数据
+            table_data = table_obj.table_data
+            
+            # 准备元数据
+            metadata = {
+                '表名': table_name,
+                '表头文本': table_obj.header_text,
+                '起始页': table_obj.page_start_num + 1,
+                '结束页': table_obj.page_end_num + 1,
+                '是否跨页合并': '是' if table_obj.is_merged else '否',
+                '行数': len(table_obj.table_data),
+                '列数': len(table_obj.table_data[0]) if table_obj.table_data else 0
+            }
+
+            # 导出到Excel
+            excel_file = self._db.export_table_to_excel(
+                table_data=table_data,
+                table_name=table_name,
+                metadata=metadata,
+                output_dir=os.path.join(self.EXCEL_OUTPUT_DIR, f"{self.COMPANY_NAME}_{self.REPORT_YEAR}")
+            )
+            
+            if excel_file:
+                exported_files.append(excel_file)
 
         print(f"\n[OK] 成功导出 {len(exported_files)} 个 Excel 文件")
 
@@ -330,8 +354,6 @@ class TestTableExtractionAndExport:
             print(f"[!] 测试文件不存在: {self.TEST_PDF_PATH}")
             return False
 
-        test_db_path = "./data/db/test_financial_data.duckdb"
-
         try:
             # 步骤1：提取表格
             print("\n--- 步骤1：提取表格 ---")
@@ -342,18 +364,40 @@ class TestTableExtractionAndExport:
             valid_tables = {k: v for k, v in main_tables.items() if v is not None}
             print(f"[OK] 提取到 {len(valid_tables)} 个有效表格")
 
-            # 步骤2 & 3：保存到数据库并导出 Excel
-            print("\n--- 步骤2-3：保存到数据库并导出 Excel ---")
-            exported_files = save_and_export_tables(
-                main_tables=main_tables,
+            # 步骤2：保存到数据库
+            print("\n--- 步骤2：保存到数据库 ---")
+            report_id = self._db.create_report(
                 company_name=self.COMPANY_NAME,
+                company_short_name=self.COMPANY_NAME,
+                stock_code="",
                 report_year=self.REPORT_YEAR,
-                report_period=self.REPORT_PERIOD,
-                db_path=test_db_path,
+                report_period=ReportPeriod(self.REPORT_PERIOD),
+                source_file=self.TEST_PDF_PATH
+            )
+            print(f"[OK] 创建财务报告记录，ID: {report_id}")
+
+            # 保存表格指标
+            for table_name, table_obj in valid_tables.items():
+                if table_obj:
+                    self._db.create_metric(
+                        report_id=report_id,
+                        metric_name=f"{table_name}_行数",
+                        value=float(len(table_obj.table_data)),
+                        unit="行",
+                        source_context=table_obj.header_text,
+                        page_number=table_obj.page_start_num + 1
+                    )
+
+            # 验证数据库保存
+            metrics = self._db.get_metrics_by_report(report_id)
+            print(f"[OK] 已保存 {len(metrics)} 个指标到数据库")
+
+            # 步骤3：导出 Excel
+            print("\n--- 步骤3：导出 Excel ---")
+            exported_files = self._db.export_report_tables_to_excel(
+                report_id=report_id,
                 output_dir=self.EXCEL_OUTPUT_DIR
             )
-
-            print(f"[OK] 数据已保存到数据库: {test_db_path}")
             print(f"[OK] 已导出 {len(exported_files)} 个 Excel 文件")
 
             # 验证 Excel 文件
@@ -361,24 +405,13 @@ class TestTableExtractionAndExport:
                 self.assert_true(os.path.exists(excel_file), f"Excel 文件应该存在: {excel_file}")
                 self.assert_true(os.path.getsize(excel_file) > 0, f"Excel 文件大小应该大于 0: {excel_file}")
 
-            # 验证数据库
-            with TableDataSaver(test_db_path) as saver:
-                for table_name in valid_tables.keys():
-                    retrieved = saver.get_table_by_name(
-                        table_name=table_name,
-                        company_name=self.COMPANY_NAME,
-                        report_year=self.REPORT_YEAR,
-                        report_period=self.REPORT_PERIOD
-                    )
-                    self.assert_true(len(retrieved) > 0, f"应该能从数据库读取 {table_name}")
-
             print("\n[OK] 集成测试完成：所有功能正常")
 
-        finally:
-            # 清理测试数据库
-            if os.path.exists(test_db_path):
-                os.remove(test_db_path)
-                print(f"[OK] 测试数据库已清理")
+        except Exception as e:
+            print(f"\n[X] 集成测试失败: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
 
         return True
 

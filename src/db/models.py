@@ -39,8 +39,6 @@ class FinancialReport(Model):
     # 年份 + 周期 共同定义时间点
     report_year = IntegerField(null=False, index=True)  # 报告所属年份，如2023，用于查询索引
     report_period = CharField(max_length=10, null=False, index=True)  # 报告周期（Q1/H1/Q3/FY），用于查询索引
-    
-    shares_total = FloatField(null=False)  # 股份总数
 
     source_file = CharField(max_length=500, null=True)  # 源PDF文件路径，用于追溯原始数据
     created_at = DateTimeField(default=datetime.now)  # 记录创建时间，自动填充当前时间

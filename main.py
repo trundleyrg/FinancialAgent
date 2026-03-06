@@ -8,7 +8,8 @@ import fitz  # PyMuPDF
 
 from src.tools.chapter_extractor import PDFChapterExtractor
 from src.db.db_connector import get_db
-from src.db.table_data_saver import save_tables_to_db
+from src.db.models import ReportPeriod
+from src.db.db_connector import save_tables_to_db
 from src.utils.logger import main_logger
 
 
@@ -115,25 +116,41 @@ def process_pdf_file(pdf_path: str):
     处理单个 PDF 文件
     :param pdf_path: PDF 文件路径
     """
+    # 初始化数据库表
+    db = get_db()
+    db.create_tables()
+
     filename = os.path.basename(pdf_path)
     main_logger.info(f"正在处理文件: {filename}")
     
-    # 从PDF第一页提取公司名称、公司代码和年份
-    company_name, company_short_name, company_code, report_year, report_period = get_company_info(pdf_path)
-    
-    main_logger.info(f"公司名称: {company_name}, 公司代码: {company_code}, 公司简称： {company_short_name}, 年份: {report_year}, 期间: {report_period}")
-    
-    # 使用 PDFChapterExtractor 提取主要表格
-    extractor = PDFChapterExtractor(pdf_path)
     try:
-        main_tables = extractor.extract_main_tables()
+        # 从PDF第一页提取公司名称、公司代码和年份
+        company_name, company_short_name, company_code, report_year, report_period = get_company_info(pdf_path)
         
+        main_logger.info(f"公司名称: {company_name}, 公司代码: {company_code}, 公司简称： {company_short_name}, 年份: {report_year}, 期间: {report_period}")
+
+        # 使用 PDFChapterExtractor 提取主要表格
+        extractor = PDFChapterExtractor(pdf_path)
+
+        main_tables = extractor.extract_main_tables()
+
         # 保存表格数据到 DuckDB
-        save_tables_to_db(main_tables, company_name, report_year, report_period)
+        save_tables_to_db(
+            main_tables=main_tables,
+            company_name=company_name,
+            pdf_path=pdf_path,
+            company_short_name=company_short_name,
+            company_code=company_code,
+            report_year=report_year,
+            report_period=report_period,
+            stock_code=company_code,
+            db_connector=db
+        )
         
         main_logger.info(f"已成功处理并保存: {filename}")
     except Exception as e:
         main_logger.error(f"处理文件 {filename} 时出错: {str(e)}")
+        raise
     finally:
         extractor.close()
 
@@ -163,6 +180,7 @@ def main():
             process_pdf_file(str(pdf_file))
         except Exception as e:
             main_logger.error(f"处理文件 {pdf_file} 时发生未预期错误: {str(e)}")
+            raise
     
     main_logger.info("PDF 文件处理完成！")
 
