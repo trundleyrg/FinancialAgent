@@ -764,19 +764,37 @@ def save_tables_to_db(main_tables: Dict[str, Any], company_name: str, pdf_path:s
     db = db_connector or get_db()
     saved_ids = {}
 
-    # 添加financial_reports表
-    report_id = db.insert_record(
-            table_name="financial_reports",
-            company_name=company_name,
-            company_short_name=company_short_name,
-            stock_code=company_code,
-            report_year=report_year,
-            report_period=ReportPeriod(report_period) if report_period else ReportPeriod.FY,
-            source_file=pdf_path
-    )
-
     # 标准化报告期间
     period_value = report_period if report_period else "FY"
+    if isinstance(period_value, ReportPeriod):
+        period_value = period_value.value
+
+    # 检查 financial_reports 表中是否已存在相同 stock_code 和 report_year 的记录
+    existing_reports = db.filter_records(
+        "financial_reports",
+        stock_code=company_code,
+        report_year=report_year
+    )
+
+    report_data = {
+        "company_name": company_name,
+        "company_short_name": company_short_name,
+        "stock_code": company_code,
+        "report_year": report_year,
+        "report_period": ReportPeriod(report_period) if report_period else ReportPeriod.FY,
+        "source_file": pdf_path
+    }
+
+    if existing_reports:
+        # 更新现有记录
+        existing_report = existing_reports[0]
+        report_id = existing_report.id if hasattr(existing_report, 'id') else existing_report['id']
+        db.update_record("financial_reports", report_id, **report_data)
+        db_logger.info(f"更新 financial_reports 记录，ID: {report_id}")
+    else:
+        # 创建新记录
+        report_id = db.insert_record("financial_reports", **report_data)
+        db_logger.info(f"创建 financial_reports 记录，ID: {report_id}")
     if isinstance(period_value, ReportPeriod):
         period_value = period_value.value
 
@@ -825,7 +843,7 @@ def save_tables_to_db(main_tables: Dict[str, Any], company_name: str, pdf_path:s
                 saved_ids[table_db_name] = record_id
             else:
                 # 创建新记录
-                record_id = db.create_record(table_db_name, **model_data)
+                record_id = db.insert_record(table_db_name, **model_data)
                 db_logger.info(f"创建 {table_name} 记录，ID: {record_id}")
                 saved_ids[table_db_name] = record_id
 
