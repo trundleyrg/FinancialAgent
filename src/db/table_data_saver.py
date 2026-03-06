@@ -23,7 +23,9 @@ class TableDataSaver:
         :param db_path: DuckDB 数据库文件路径，默认从环境变量获取
         """
         if db_path is None:
-            db_path = os.getenv("DUCKDB_DB_PATH", "./data/db/financial_data.duckdb")
+            db_path = os.getenv("DUCKDB_DB_PATH")
+            if db_path is None:
+                raise ValueError("环境变量 DUCKDB_DB_PATH 未设置")
         
         self.db_path = db_path
         self.conn = duckdb.connect(self.db_path)

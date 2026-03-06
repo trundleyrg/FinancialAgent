@@ -35,14 +35,19 @@ class DatabaseConnector:
         :param database_url: 数据库连接字符串，如果为 None，则根据数据库类型使用默认值
         """
         if database_type is None:
-            database_type = os.getenv("DATABASE", "duckdb").lower()
+            database_type = os.getenv("DATABASE")
+            if database_type is None:
+                raise ValueError("环境变量 DATABASE 未设置")
+            database_type = database_type.lower()
 
         self.database_type = database_type
 
         # 根据数据库类型创建对应的引擎
         if database_type == "postgresql":
             if database_url is None:
-                database_url = os.getenv("POSTGRES_DB_URL", "postgresql://postgres:postgres@localhost:5432/financial_statements")
+                database_url = os.getenv("POSTGRES_DB_URL")
+                if database_url is None:
+                    raise ValueError("环境变量 POSTGRES_DB_URL 未设置")
             self.engine = PostgresqlDatabase(
                 database=database_url.split('/')[-1],
                 user=database_url.split('://')[1].split(':')[0],
@@ -54,7 +59,9 @@ class DatabaseConnector:
             db.initialize(self.engine)
         elif database_type == "duckdb":
             if database_url is None:
-                database_url = os.getenv("DUCKDB_DB_PATH", "./data/db/financial_data.duckdb")
+                database_url = os.getenv("DUCKDB_DB_PATH")
+                if database_url is None:
+                    raise ValueError("环境变量 DUCKDB_DB_PATH 未设置")
             
             # 为了兼容Peewee模型，我们使用SQLite作为Peewee的后端
             # 但同时保留一个SQLAlchemy引擎用于duckdb的特定操作
