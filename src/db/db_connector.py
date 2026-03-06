@@ -665,7 +665,8 @@ def _parse_table_data_to_model_data(table_data: List[List[str]], model_class: Ty
     for field_name, field in fields.items():
         if hasattr(field, 'help_text') and field.help_text:
             field_help_text_map[field.help_text] = field_name
-        field_help_text_map[field_name] = field_name
+        else:
+            field_help_text_map[field_name] = field_name
 
     # 遍历表格数据，尝试匹配字段
     for row in table_data:
