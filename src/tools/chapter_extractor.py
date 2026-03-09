@@ -3,7 +3,7 @@ chapter_extractor.py     # 负责识别和提取 PDF 指定章节
 
 使用fitz.open().get_toc()的方式定位章节位置和表格关系。
 """
-
+import re
 import fitz  # PyMuPDF
 from typing import List, Tuple, Dict, Optional
 
@@ -16,6 +16,99 @@ class PDFChapterExtractor:
         self.toc = self.doc.get_toc()
         self.page_heights = [page.rect.height for page in self.doc]
         
+    def get_company_info(self):
+        """
+        从PDF文档第一页中提取公司名称、公司代码和年份
+        :return: tuple of (company_name, company_code, year)
+        """
+        page = self.doc[0]  # 第一页
+        text = page.get_text()
+        lines = text.split('\n')
+        
+        company_name = ""
+        company_short_name = ""
+        company_code = ""
+        year = 0
+        
+        # 查找公司名称
+        for line in lines:
+            line = line.strip()
+            
+            # 查找公司名称，通常包含"股份有限公司"或"有限公司"
+            if "股份有限公司" in line or "有限公司" in line:
+                company_name = line.strip()
+                match = re.search(r'(.+?(?:股份有限公司|有限公司))', line)
+                if match:
+                    company_name = match.group(1).strip()
+                break
+            elif "公司" in line and ("有限" in line or "股份" in line):
+                company_name = line.strip()
+                break
+        
+        # 查找公司简称
+        for line in lines:
+            line = line.strip()
+            # 匹配"公司简称"、"股票代码"、"证券代码"等
+            match = re.search(r'(?:公司简称)[:：\s]*([^0-9]+)', line)
+            if match:
+                company_short_name = match.group(1).strip()
+                break
+        
+        # 查找公司代码，通常在文档中以"证券代码"、"股票代码"等形式出现
+        for line in lines:
+            line = line.strip()
+            # 匹配证券代码、股票代码等
+            code_matches = re.search(r'(?:证券代码|股票代码|代码)[:：\s]*([0-9]{6})', line)
+            if code_matches:
+                company_code = code_matches.group(1)
+                break
+            # 也可能在公司名称附近直接出现6位数字代码
+            if company_name and company_name in line:
+                nearby_lines = [line]
+                line_idx = lines.index(line)
+                if line_idx > 0:
+                    nearby_lines.append(lines[line_idx - 1])
+                if line_idx < len(lines) - 1:
+                    nearby_lines.append(lines[line_idx + 1])
+                
+                for near_line in nearby_lines:
+                    code_match = re.search(r'([0-9]{6})', near_line)
+                    if code_match and code_match.group(1) != '000000':  # 排除无效代码
+                        company_code = code_match.group(1)
+                        break
+                if company_code:
+                    break
+        
+        # 从标题中提取年份，寻找年报中的年份信息
+        for line in lines:
+            line = line.strip()
+            if "年度报告" in line or "年报" in line:
+                year_match = re.search(r'(\d{4})', line)
+                if year_match:
+                    year = int(year_match.group(1))
+                    break
+        
+        # 确定报告期间
+        report_period = None
+        for line in lines:
+            if '年度报告' in text or '年报' in text:
+                report_period = 'FY'
+            elif '三季报' in text or '第三季度报告' in text:
+                report_period = 'Q3'
+            elif '半年报' in text or '中报' in text or '半年度报告' in text:
+                report_period = 'H1'
+            elif '一季报' in text or '第一季度报告' in text:
+                report_period = 'Q1'
+            elif '半年度财务报告' in text:
+                report_period = 'H1'
+            elif '年度财务报告' in text:
+                report_period = 'FY'
+            if report_period is not None:
+                break
+        
+        return company_name, company_short_name, company_code, year, report_period
+
+    
     def find_section_range(self, section_title: str, section_level: int=None) -> Tuple[int, int]:
         """
         定位章节页码范围, 支持不指定section_level的模糊匹配。
