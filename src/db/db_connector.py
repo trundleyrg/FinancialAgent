@@ -735,6 +735,125 @@ def _normalize_table_name(table_name: str) -> str:
     return table_name
 
 
+def filter_table_by_period(
+    table_obj: Any,
+    report_period: str,
+    report_year: int
+) -> Any:
+    """
+    根据报告期间和年份过滤表格数据，仅保留相关列
+
+    财务报表表格通常有以下列结构：
+    - 资产负债表：项目 | 期末余额 | 年初余额
+    - 利润表/现金流量表：项目 | 本期金额 | 上期金额 或 本年累计 | 上年同期
+
+    根据报告期间保留对应的列：
+    - FY (年报): 保留"期末余额"/"本期金额"/"本年累计"等当前期数据
+    - Q1/H1/Q3 (季报/半年报/三季报): 保留对应的期间数据列
+
+    :param table_obj: TableWithHeader 对象，包含表格数据
+    :param report_period: 报告期间 (Q1, H1, Q3, FY)
+    :param report_year: 报告年份
+    :return: 过滤后的 TableWithHeader 对象
+    """
+    from src.db.table_models import TableWithHeader
+
+    if not report_period:
+        report_period = "FY"
+
+    if table_obj is None or not table_obj.table_data or len(table_obj.table_data) < 1:
+        return table_obj
+
+    table_data = table_obj.table_data
+
+    # 获取表头
+    header_row = table_data[0]
+    if not header_row:
+        return table_obj
+
+    # 定义不同报告期间需要保留的列关键词
+    # 第一列是项目名称，始终保留
+    period_keywords = {
+        "FY": ["期末", "本期", "本年", "年度", "本期发生额", "本年金额", "本期数"],
+        "Q1": ["期末", "本期", "本年", "第一季度", "Q1", "本期发生额", "本年金额", "本期数"],
+        "H1": ["期末", "本期", "本年", "上半年", "半年度", "H1", "本期发生额", "本年金额", "本期数"],
+        "Q3": ["期末", "本期", "本年", "前三季度", "1-9月", "本期发生额", "本年金额", "本期数"],
+    }
+
+    # 定义需要排除的列关键词（上期/期初数据）
+    exclude_keywords = ["期初", "年初", "上期", "上年", "去年同期", "上期金额", "上期数"]
+
+    # 获取当前期间的保留关键词
+    keep_keywords = period_keywords.get(report_period, period_keywords["FY"])
+
+    # 确定需要保留的列索引
+    # 第一列（项目名称）始终保留
+    keep_indices = [0]
+
+    for col_idx, col_header in enumerate(header_row[1:], start=1):
+        if not col_header:
+            continue
+
+        col_header_str = str(col_header).strip()
+        # 检查是否是上年/期初数据列
+        is_exclude = any(keyword in col_header_str for keyword in exclude_keywords)
+        # 检查是否是本年/本期数据列
+        is_keep = any(keyword in col_header_str for keyword in keep_keywords)
+        if is_keep and not is_exclude:
+            # 如果明确是当前期数据，保留
+            keep_indices.append(col_idx)
+        elif not is_exclude:
+            # 如果既不是本期也不是上期，可能是其他辅助列，根据情况保留
+            # 检查是否包含年份信息
+            year_str = str(report_year)
+            prev_year_str = str(report_year - 1)
+
+            if year_str in col_header_str and prev_year_str not in col_header_str:
+                # 包含当前年份但不包含上一年，认为是本期数据
+                keep_indices.append(col_idx)
+            elif "项目" in col_header_str or "科目" in col_header_str:
+                keep_indices.append(col_idx)
+
+    # 如果没有找到额外的列，保留所有非排除列
+    if len(keep_indices) == 1 and len(header_row) > 1:
+        for col_idx, col_header in enumerate(header_row[1:], start=1):
+            col_header_str = str(col_header).strip()
+            is_exclude = any(keyword in col_header_str for keyword in exclude_keywords)
+            if not is_exclude:
+                keep_indices.append(col_idx)
+
+    # 按索引排序
+    keep_indices = sorted(set(keep_indices))
+
+    if len(keep_indices) <= 1:
+        db_logger.debug("表格未能识别出期间列，保留原表")
+        return table_obj
+
+    # 过滤表格数据
+    filtered_data = []
+    for row in table_data:
+        if not row:
+            continue
+        filtered_row = [row[i] for i in keep_indices if i < len(row)]
+        filtered_data.append(filtered_row)
+
+    # 创建新的 TableWithHeader 对象
+    filtered_table_obj = TableWithHeader(
+        table_data=filtered_data,
+        header_text=table_obj.header_text,
+        page_start_num=table_obj.page_start_num,
+        page_end_num=table_obj.page_end_num,
+        bbox=table_obj.bbox,
+        is_merged=table_obj.is_merged
+    )
+
+    db_logger.info(
+        f"表格列过滤完成: 原始 {len(header_row)} 列 -> 保留 {len(keep_indices)} 列, "
+        f"保留索引: {keep_indices}"
+    )
+    return filtered_table_obj
+
+
 # ============ 全局单例 ============
 _db_connector: Optional[DatabaseConnector] = None
 
@@ -774,7 +893,8 @@ def save_tables_to_db(main_tables: Dict[str, Any], company_name: str, pdf_path:s
     existing_reports = db.filter_records(
         "financial_reports",
         stock_code=company_code,
-        report_year=report_year
+        report_year=report_year,
+        report_period=report_period
     )
 
     report_data = {
@@ -803,6 +923,9 @@ def save_tables_to_db(main_tables: Dict[str, Any], company_name: str, pdf_path:s
         if table_obj is None:
             continue
 
+        # 根据报告期间和年份过滤表格列
+        table_obj = filter_table_by_period(table_obj, report_period, report_year)
+    
         # 标准化表格名称
         normalized_name = _normalize_table_name(table_name)
         model_class = TABLE_NAME_TO_MODEL.get(normalized_name)
