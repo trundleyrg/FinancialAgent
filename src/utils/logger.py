@@ -85,3 +85,8 @@ sys_logger = manager.get_logger(
 main_logger = manager.get_logger(
     "Main", "main.log"
 )
+
+# UI 界面日志
+ui_logger = manager.get_logger(
+    "UI", "ui.log"
+)

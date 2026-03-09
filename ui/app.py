@@ -6,7 +6,7 @@ import sys
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 from pdf_parser_ui import create_pdf_parser_tab
-from db_query_ui import create_db_query_tab
+# from db_query_ui import create_db_query_tab
 
 
 def create_main_app():
@@ -34,25 +34,18 @@ def create_main_app():
         with gr.Tab("PDF上传与解析"):
             create_pdf_parser_tab()
         
-        with gr.Tab("数据查询"):
-            create_db_query_tab()
+        # with gr.Tab("数据查询"):
+        #     create_db_query_tab()
         
-        gr.Markdown(
-            """
-            ---
-            *FinancialAgent 智能财务报告分析系统* - 让财务数据分析更简单高效
-            """
-        )
-    
     return demo
 
 
 if __name__ == "__main__":
     demo = create_main_app()
     demo.launch(
-        share=True,
+        share=False,
         server_name="127.0.0.1",
-        server_port=7861,  # 使用不同的端口
+        server_port=7861,
         show_error=True,
         theme=gr.themes.Soft(),
         css="""
