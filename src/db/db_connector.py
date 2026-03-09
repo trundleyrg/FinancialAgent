@@ -710,6 +710,8 @@ def _parse_table_data_to_model_data(table_data: List[List[str]], model_class: Ty
                 if '%' in value_str_clean:
                     value_str_clean = value_str_clean.replace('%', '')
                     value = float(value_str_clean)
+                elif value_str_clean == '-':
+                    value = 0
                 else:
                     value = float(value_str_clean)
                 model_data[field_name] = value
