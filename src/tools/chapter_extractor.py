@@ -300,7 +300,7 @@ class PDFChapterExtractor:
             merged_tables.append(current)
             i = j  # 跳过已合并的表格
         
-        if start_page == merged_tables[0].page_start_num - 1:
+        if (len(merged_tables) == 1 and start_page == merged_tables[0].page_start_num - 1) or (len(merged_tables) > 1 and start_page == merged_tables[-2].page_start_num - 1):
             # 第一个表的表头在start_page页的底部
             # 从start_page页提取文本块
             text_blocks, _ = self.extract_page_elements(start_page)
