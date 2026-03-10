@@ -1,6 +1,5 @@
 import gradio as gr
 import os
-import io
 import pandas as pd
 from pathlib import Path
 from typing import Dict, List, Optional, Any
@@ -33,13 +32,13 @@ def table_to_dataframe(table_data: List[List[str]]) -> pd.DataFrame:
     return pd.DataFrame(normalized_data, columns=headers)
 
 
-def dataframe_to_excel_bytes(df: pd.DataFrame, table_name: str) -> bytes:
-    """将 DataFrame 转换为 Excel 字节流"""
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+def save_dataframe_to_excel_file(df: pd.DataFrame, table_name: str, temp_dir: Path) -> Path:
+    """将DataFrame保存为Excel文件到临时目录，返回文件路径"""
+    safe_name = table_name.replace("/", "_").replace("\\", "_").replace(":", "_")
+    file_path = temp_dir / f"{safe_name}.xlsx"
+    with pd.ExcelWriter(file_path, engine='openpyxl') as writer:
         df.to_excel(writer, sheet_name=table_name[:31], index=False)
-    output.seek(0)
-    return output.getvalue()
+    return file_path
 
 
 def process_pdf(pdf_file, db_type: str = "duckdb"):
@@ -47,17 +46,26 @@ def process_pdf(pdf_file, db_type: str = "duckdb"):
     处理上传的PDF文件，提取财务报表并保存到数据库
     
     Returns:
-        tuple: (处理结果消息, 公司信息, 表格列表, 下载文件列表)
+        tuple: (处理结果消息, 公司信息, 表格列表, 下载文件路径列表)
     """
     if not pdf_file:
         return "请上传一个PDF文件", "", [], []
     
     extractor = None
+    temp_dir = None
     
     try:
         file_path = pdf_file.name
         filename = os.path.basename(file_path)
         ui_logger.info(f"开始处理PDF文件: {filename}")
+        
+        # 创建临时文件夹（项目路径下的 data/temp 目录）
+        import uuid
+        temp_base_dir = Path("./data/temp").resolve()
+        temp_base_dir.mkdir(parents=True, exist_ok=True)
+        temp_dir = temp_base_dir / f"pdf_parser_{uuid.uuid4().hex[:8]}"
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        ui_logger.info(f"创建临时文件夹: {temp_dir}")
         
         # 初始化数据库
         db = get_db(database_type=db_type)
@@ -121,10 +129,9 @@ def process_pdf(pdf_file, db_type: str = "duckdb"):
                 "页码": f"{table_obj.page_start_num + 1}-{table_obj.page_end_num + 1}"
             })
             
-            # 生成 Excel 文件
-            excel_bytes = dataframe_to_excel_bytes(df, table_name)
-            safe_name = table_name.replace("/", "_").replace("\\", "_").replace(":", "_")
-            download_files.append((f"{safe_name}.xlsx", excel_bytes))
+            # 保存Excel文件到临时文件夹
+            excel_path = save_dataframe_to_excel_file(df, table_name, temp_dir)
+            download_files.append(excel_path)
         
         success_msg = f"✅ PDF处理成功！文件: {filename}\n成功提取 {len(valid_tables)} 个财务报表并已保存到数据库。"
         
@@ -209,35 +216,41 @@ def create_pdf_parser_tab():
             download_btn_4 = gr.DownloadButton("下载: 母公司利润表", visible=False)
             download_btn_5 = gr.DownloadButton("下载: 合并现金流量表", visible=False)
             download_btn_6 = gr.DownloadButton("下载: 母公司现金流量表", visible=False)
+            download_btn_7 = gr.DownloadButton("下载: 股份变动情况表", visible=False)
         
         download_buttons = [download_btn_1, download_btn_2, download_btn_3, 
-                           download_btn_4, download_btn_5, download_btn_6]
+                           download_btn_4, download_btn_5, download_btn_6, download_btn_7]
         
-        def update_download_buttons(file_list):
-            """根据提取的表格更新下载按钮"""
+        def update_download_buttons(file_path_list):
+            """根据提取的表格更新下载按钮
+            
+            Args:
+                file_path_list: 文件路径列表 (Path对象列表)
+            """
             updates = []
             for i, btn in enumerate(download_buttons):
-                if i < len(file_list):
-                    filename, file_bytes = file_list[i]
+                if i < len(file_path_list):
+                    file_path = file_path_list[i]
                     # 从文件名提取表格名称
-                    table_name = filename.replace(".xlsx", "").replace("_", "")
-                    updates.append({
-                        "visible": True,
-                        "value": (filename, file_bytes),
-                        "label": f"下载: {table_name}"
-                    })
+                    table_name = file_path.stem.replace("_", "")
+                    # DownloadButton value should be a file path
+                    updates.append(gr.update(
+                        visible=True,
+                        value=str(file_path),  # Pass file path
+                        label=f"下载: {table_name}"
+                    ))
                 else:
-                    updates.append({"visible": False})
+                    updates.append(gr.update(visible=False))
             return updates
         
         # 处理按钮点击事件
         def on_process(pdf_file, db_type_val):
-            result_msg, company_txt, table_list, download_files = process_pdf(pdf_file, db_type_val)
+            result_msg, company_txt, table_list, download_file_paths = process_pdf(pdf_file, db_type_val)
             
             # 更新下载按钮
-            button_updates = update_download_buttons(download_files)
+            button_updates = update_download_buttons(download_file_paths)
             
-            return [result_msg, company_txt, table_list, download_files] + button_updates
+            return [result_msg, company_txt, table_list, download_file_paths] + button_updates
         
         process_btn.click(
             fn=on_process,

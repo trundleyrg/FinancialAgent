@@ -18,7 +18,7 @@ def create_main_app():
     ) as demo:
         gr.Markdown(
             """
-            <div class="logo">FinancialAgent 智能财务报告分析系统</div>
+            <div class="logo">FinancialAgent</div>
             """,
             elem_classes=["logo"]
         )
