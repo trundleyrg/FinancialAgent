@@ -16,7 +16,8 @@ from src.db.models import (
     FinancialReport, FinancialMetric, ReportPeriod, db,
     ConsolidatedBalanceSheet, ParentCompanyBalanceSheet,
     ConsolidatedIncomeStatement, ParentCompanyIncomeStatement,
-    ConsolidatedCashFlowStatement, ParentCompanyCashFlowStatement
+    ConsolidatedCashFlowStatement, ParentCompanyCashFlowStatement,
+    ShareStructure
 )
 from src.utils.logger import db_logger
 
@@ -228,6 +229,7 @@ class DatabaseConnector:
                 ConsolidatedBalanceSheet, ParentCompanyBalanceSheet,
                 ConsolidatedIncomeStatement, ParentCompanyIncomeStatement,
                 ConsolidatedCashFlowStatement, ParentCompanyCashFlowStatement,
+                ShareStructure,
             ]
             self.engine.create_tables(tables, safe=True)
             db_logger.info("PostgreSQL表格创建完成")
@@ -243,6 +245,7 @@ class DatabaseConnector:
             ConsolidatedBalanceSheet, ParentCompanyBalanceSheet,
             ConsolidatedIncomeStatement, ParentCompanyIncomeStatement,
             ConsolidatedCashFlowStatement, ParentCompanyCashFlowStatement,
+            ShareStructure,
         ]
         
         for table in tables:
@@ -372,6 +375,7 @@ class DatabaseConnector:
             'parent_company_income_statement': ParentCompanyIncomeStatement,
             'consolidated_cash_flow_statement': ConsolidatedCashFlowStatement,
             'parent_company_cash_flow_statement': ParentCompanyCashFlowStatement,
+            'share_structure': ShareStructure,
         }
         if table_name not in model_map:
             raise ValueError(f"未知的表名: {table_name}")
@@ -488,6 +492,7 @@ class DatabaseConnector:
             'parent_company_income_statement',
             'consolidated_cash_flow_statement',
             'parent_company_cash_flow_statement',
+            'share_structure',
             'financial_reports',  # 最后删主表
         ]
         
@@ -501,6 +506,7 @@ class DatabaseConnector:
                 ConsolidatedBalanceSheet, ParentCompanyBalanceSheet,
                 ConsolidatedIncomeStatement, ParentCompanyIncomeStatement,
                 ConsolidatedCashFlowStatement, ParentCompanyCashFlowStatement,
+                ShareStructure,
                 FinancialReport,
             ]
             self.engine.drop_tables(tables, safe=True)
@@ -633,6 +639,9 @@ TABLE_NAME_TO_MODEL = {
     # 母公司现金流量表
     '母公司现金流量表': ParentCompanyCashFlowStatement,
     'parent_company_cash_flow_statement': ParentCompanyCashFlowStatement,
+    # 股份变动情况表
+    '股份变动情况表': ShareStructure,
+    'share_structure': ShareStructure,
 }
 
 # 报表类型到表名的映射
@@ -643,6 +652,7 @@ TABLE_TYPE_NAMES = {
     'parent_company_income_statement': '母公司利润表',
     'consolidated_cash_flow_statement': '合并现金流量表',
     'parent_company_cash_flow_statement': '母公司现金流量表',
+    'share_structure': '股份变动情况表',
 }
 
 
@@ -1014,6 +1024,7 @@ def export_tables_to_excel(company_name: str, report_year: int, report_period: s
         ('parent_company_income_statement', ParentCompanyIncomeStatement),
         ('consolidated_cash_flow_statement', ConsolidatedCashFlowStatement),
         ('parent_company_cash_flow_statement', ParentCompanyCashFlowStatement),
+        ('share_structure', ShareStructure),
     ]
 
     for table_type, model_class in report_types:

@@ -588,6 +588,62 @@ class ParentCompanyCashFlowStatement(Model):
         database = db
         table_name = 'parent_company_cash_flow_statement'
 
+
+class ShareStructure(Model):
+    """
+    股份结构 ORM 模型
+    用于记录股份变动情况表中变动后的最新股份情况
+    """
+    id = AutoField(primary_key=True)
+    company_name = CharField(max_length=255, null=False, index=True)
+    stock_code = CharField(max_length=20, null=False, index=True)
+    report_year = IntegerField(null=False, index=True)
+    report_period = CharField(max_length=10, null=False, index=True)
+
+    # 有限售条件股份（变动后）
+    restricted_shares = FloatField(null=True, help_text="有限售条件股份数量")
+    restricted_shares_ratio = FloatField(null=True, help_text="有限售条件股份比例(%)")
+    
+    # 有限售条件股份 - 细分
+    state_shares = FloatField(null=True, help_text="国家持股数量")
+    state_shares_ratio = FloatField(null=True, help_text="国家持股比例(%)")
+    state_owned_legal_person_shares = FloatField(null=True, help_text="国有法人持股数量")
+    state_owned_legal_person_shares_ratio = FloatField(null=True, help_text="国有法人持股比例(%)")
+    other_domestic_shares = FloatField(null=True, help_text="其他内资持股数量")
+    other_domestic_shares_ratio = FloatField(null=True, help_text="其他内资持股比例(%)")
+    domestic_non_state_owned_legal_person_shares = FloatField(null=True, help_text="境内非国有法人持股数量")
+    domestic_non_state_owned_legal_person_shares_ratio = FloatField(null=True, help_text="境内非国有法人持股比例(%)")
+    domestic_natural_person_shares = FloatField(null=True, help_text="境内自然人持股数量")
+    domestic_natural_person_shares_ratio = FloatField(null=True, help_text="境内自然人持股比例(%)")
+    foreign_shares = FloatField(null=True, help_text="外资持股数量")
+    foreign_shares_ratio = FloatField(null=True, help_text="外资持股比例(%)")
+    foreign_legal_person_shares = FloatField(null=True, help_text="境外法人持股数量")
+    foreign_legal_person_shares_ratio = FloatField(null=True, help_text="境外法人持股比例(%)")
+    foreign_natural_person_shares = FloatField(null=True, help_text="境外自然人持股数量")
+    foreign_natural_person_shares_ratio = FloatField(null=True, help_text="境外自然人持股比例(%)")
+    
+    # 无限售条件流通股份（变动后）
+    unrestricted_shares = FloatField(null=True, help_text="无限售条件流通股份数量")
+    unrestricted_shares_ratio = FloatField(null=True, help_text="无限售条件流通股份比例(%)")
+    
+    # 无限售条件流通股份 - 细分
+    rmb_common_shares = FloatField(null=True, help_text="人民币普通股数量")
+    rmb_common_shares_ratio = FloatField(null=True, help_text="人民币普通股比例(%)")
+    domestic_listed_foreign_shares = FloatField(null=True, help_text="境内上市的外资股数量")
+    domestic_listed_foreign_shares_ratio = FloatField(null=True, help_text="境内上市的外资股比例(%)")
+    foreign_listed_foreign_shares = FloatField(null=True, help_text="境外上市的外资股数量")
+    foreign_listed_foreign_shares_ratio = FloatField(null=True, help_text="境外上市的外资股比例(%)")
+    other_shares = FloatField(null=True, help_text="其他股份数量")
+    other_shares_ratio = FloatField(null=True, help_text="其他股份比例(%)")
+    
+    # 股份总数（变动后）
+    total_shares = FloatField(null=True, help_text="股份总数")
+    total_shares_ratio = FloatField(null=True, help_text="股份总数比例(%)")
+
+    class Meta:
+        database = db
+        table_name = 'share_structure'
+
 # --- 2. Pydantic V2 Models (用于结构化输出提取) ---
 
 class MetricItem(BaseModel):
