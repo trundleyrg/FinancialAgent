@@ -37,6 +37,24 @@ def process_pdf_file(pdf_path: str):
 
         main_tables = extractor.extract_main_tables()
 
+        # 保存为excel
+        excel_base_dir = f"./data/excel/{company_short_name}_{report_year}"
+        os.makedirs(excel_base_dir, exist_ok=True)
+        
+        for table_name, table_obj in main_tables.items():
+            if table_obj is None or not table_obj.table_data:
+                continue
+            
+            # 清理文件名中的非法字符
+            safe_table_name = table_name.replace("/", "_").replace("\\", "_").replace(":", "_")
+            excel_path = os.path.join(excel_base_dir, f"{safe_table_name}.xlsx")
+            
+            # 使用 pandas 导出为 Excel
+            import pandas as pd
+            df = pd.DataFrame(table_obj.table_data)
+            df.to_excel(excel_path, index=False, header=False)
+            main_logger.info(f"表格 {table_name} 已保存到 {excel_path}")
+
         # 保存表格数据到 DuckDB
         save_tables_to_db(
             main_tables=main_tables,
