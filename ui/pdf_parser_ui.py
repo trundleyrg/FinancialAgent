@@ -209,51 +209,39 @@ def create_pdf_parser_tab():
         gr.Markdown("点击下方按钮下载各个报表的Excel文件")
         
         with gr.Row():
-            # 动态生成下载按钮
-            download_btn_1 = gr.DownloadButton("下载: 合并资产负债表", visible=False)
-            download_btn_2 = gr.DownloadButton("下载: 母公司资产负债表", visible=False)
-            download_btn_3 = gr.DownloadButton("下载: 合并利润表", visible=False)
-            download_btn_4 = gr.DownloadButton("下载: 母公司利润表", visible=False)
-            download_btn_5 = gr.DownloadButton("下载: 合并现金流量表", visible=False)
-            download_btn_6 = gr.DownloadButton("下载: 母公司现金流量表", visible=False)
-            download_btn_7 = gr.DownloadButton("下载: 股份变动情况表", visible=False)
+            # 使用 gr.File 组件替代 DownloadButton，更可靠
+            download_file_1 = gr.File(label="合并资产负债表", visible=False)
+            download_file_2 = gr.File(label="母公司资产负债表", visible=False)
+            download_file_3 = gr.File(label="合并利润表", visible=False)
+            download_file_4 = gr.File(label="母公司利润表", visible=False)
+            download_file_5 = gr.File(label="合并现金流量表", visible=False)
+            download_file_6 = gr.File(label="母公司现金流量表", visible=False)
+            download_file_7 = gr.File(label="股份变动情况表", visible=False)
         
-        download_buttons = [download_btn_1, download_btn_2, download_btn_3, 
-                           download_btn_4, download_btn_5, download_btn_6, download_btn_7]
-        
-        def update_download_buttons(file_path_list):
-            """根据提取的表格更新下载按钮
-            
-            Args:
-                file_path_list: 文件路径列表 (Path对象列表)
-            """
-            updates = []
-            for i, btn in enumerate(download_buttons):
-                if i < len(file_path_list):
-                    file_path = file_path_list[i]
-                    # 从文件名提取表格名称
-                    table_name = file_path.stem.replace("_", "")
-                    # DownloadButton value should be a file path
-                    updates.append(gr.update(
-                        visible=True,
-                        value=str(file_path),  # Pass file path
-                        label=f"下载: {table_name}"
-                    ))
-                else:
-                    updates.append(gr.update(visible=False))
-            return updates
+        download_files = [download_file_1, download_file_2, download_file_3, 
+                         download_file_4, download_file_5, download_file_6, download_file_7]
         
         # 处理按钮点击事件
         def on_process(pdf_file, db_type_val):
             result_msg, company_txt, table_list, download_file_paths = process_pdf(pdf_file, db_type_val)
             
-            # 更新下载按钮
-            button_updates = update_download_buttons(download_file_paths)
+            file_updates = []
+            for i, file_comp in enumerate(download_files):
+                if i < len(download_file_paths):
+                    file_path = download_file_paths[i]
+                    table_name = file_path.stem.replace("_", "")
+                    file_updates.append(gr.update(
+                        visible=True,
+                        value=str(file_path),
+                        label=f"下载: {table_name}"
+                    ))
+                else:
+                    file_updates.append(gr.update(visible=False))
             
-            return [result_msg, company_txt, table_list, download_file_paths] + button_updates
+            return result_msg, company_txt, table_list, download_file_paths, *file_updates
         
         process_btn.click(
             fn=on_process,
             inputs=[pdf_input, db_type],
-            outputs=[result_text, company_info, tables_output, download_files_state] + download_buttons
+            outputs=[result_text, company_info, tables_output, download_files_state] + download_files
         )
