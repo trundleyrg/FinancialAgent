@@ -142,15 +142,42 @@ class PDFChapterExtractor:
         chapter_logger.info(f"目标章节：{section_title} 起始页:{start_page} 结束页:{end_page}")
         return start_page, end_page
 
+    def _is_header_or_footer(self, text_block: Dict, page_height: float,
+                              header_ratio: float = 0.10,
+                              footer_ratio: float = 0.10) -> bool:
+        """
+        判断文本块是否为页眉或页脚
+        
+        :param text_block: 文本块字典，包含 bbox、y_top、y_bottom 等信息
+        :param page_height: 页面高度
+        :param header_ratio: 页眉区域占页面高度的比例，默认顶部10%
+        :param footer_ratio: 页脚区域占页面高度的比例，默认底部10%
+        :return: True 表示是页眉或页脚，False 表示不是
+        """
+        y_top = text_block["y_top"]
+        y_bottom = text_block["y_bottom"]
+        
+        header_threshold = page_height * header_ratio
+        footer_threshold = page_height * (1 - footer_ratio)
+        
+        # 页眉区域：文本块顶部在页眉阈值内
+        is_header = y_top < header_threshold
+        
+        # 页脚区域：文本块底部在页脚阈值内
+        is_footer = y_bottom > footer_threshold
+        
+        return is_header or is_footer
+
     def extract_page_elements(self, page_num: int) -> Tuple[List[Dict], List]:
         """
-        提取单页的文本块和表格
+        提取单页的文本块和表格（过滤页眉和页脚）
         :return: (文本块列表, 表格列表)
         """
         page = self.doc[page_num]
+        page_height = page.rect.height
         blocks = page.get_text("dict")["blocks"]
         
-        # 提取文本块（过滤图片）
+        # 提取文本块（过滤图片和页眉页脚）
         text_blocks = []
         for block in blocks:
             if block["type"] == 0:  # text block
@@ -158,12 +185,15 @@ class PDFChapterExtractor:
                     for span in line["spans"]:
                         if span["text"].strip() == "":
                             continue
-                        text_blocks.append({
+                        text_block = {
                             "text": span["text"].strip(),
                             "bbox": span["bbox"],  # (x0, y0, x1, y1)
                             "y_top": span["bbox"][1],   # top y
                             "y_bottom": span["bbox"][3] # bottom y
-                        })
+                        }
+                        # 过滤页眉和页脚
+                        if not self._is_header_or_footer(text_block, page_height):
+                            text_blocks.append(text_block)
         
         # 提取表格（使用 find_tables）
         tables = []
