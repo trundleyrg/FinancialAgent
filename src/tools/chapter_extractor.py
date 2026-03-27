@@ -168,16 +168,62 @@ class PDFChapterExtractor:
         
         return is_header or is_footer
 
+    def _is_in_table(self, bbox: Tuple[float, float, float, float], table_bboxes: List[Tuple[float, float, float, float]], overlap_threshold: float = 0.5) -> bool:
+        """
+        判断文本块是否位于表格区域内
+        
+        :param bbox: 文本块的边界框 (x0, y0, x1, y1)
+        :param table_bboxes: 表格边界框列表
+        :param overlap_threshold: 重叠面积比例阈值，超过此值认为文本块属于表格
+        :return: True 表示文本块在表格内，False 表示不在
+        """
+        if not table_bboxes:
+            return False
+        
+        text_area = (bbox[2] - bbox[0]) * (bbox[3] - bbox[1])
+        if text_area == 0:
+            return False
+        
+        for table_bbox in table_bboxes:
+            # 计算重叠区域
+            x_overlap = max(0, min(bbox[2], table_bbox[2]) - max(bbox[0], table_bbox[0]))
+            y_overlap = max(0, min(bbox[3], table_bbox[3]) - max(bbox[1], table_bbox[1]))
+            overlap_area = x_overlap * y_overlap
+            
+            # 如果重叠面积占文本块面积的50%以上，认为属于表格
+            if overlap_area / text_area >= overlap_threshold:
+                return True
+        
+        return False
+
     def extract_page_elements(self, page_num: int) -> Tuple[List[Dict], List]:
         """
-        提取单页的文本块和表格（过滤页眉和页脚）
+        提取单页的文本块和表格（过滤页眉、页脚和表格区域内的文本）
         :return: (文本块列表, 表格列表)
         """
         page = self.doc[page_num]
         page_height = page.rect.height
         blocks = page.get_text("dict")["blocks"]
         
-        # 提取文本块（过滤图片和页眉页脚）
+        # 先提取表格，获取表格边界框列表（用于过滤文本块）
+        table_bboxes = []
+        tables = []
+        try:
+            tabs = page.find_tables()
+            for tab in tabs:
+                if tab.header and tab.cells:  # 有效表格
+                    table_bboxes.append(tab.bbox)
+                    tables.append({
+                        "table": tab,
+                        "bbox": tab.bbox,  # (x0, y0, x1, y1)
+                        "y_top": tab.bbox[1],
+                        "y_bottom": tab.bbox[3],
+                        "col_count": len(tab.header.cells) if tab.header else 0
+                    })
+        except Exception as e:
+            chapter_logger.warning(f"页面 {page_num} 表格提取失败: {e}")
+        
+        # 提取文本块（过滤图片、页眉页脚和表格区域内的文本）
         text_blocks = []
         for block in blocks:
             if block["type"] == 0:  # text block
@@ -192,25 +238,12 @@ class PDFChapterExtractor:
                             "y_bottom": span["bbox"][3] # bottom y
                         }
                         # 过滤页眉和页脚
-                        if not self._is_header_or_footer(text_block, page_height):
-                            text_blocks.append(text_block)
-        
-        # 提取表格（使用 find_tables）
-        tables = []
-        try:
-            tabs = page.find_tables()
-            for tab in tabs:
-                if tab.header and tab.cells:  # 有效表格
-                    tables.append({
-                        "table": tab,
-                        "bbox": tab.bbox,  # (x0, y0, x1, y1)
-                        "y_top": tab.bbox[1],
-                        "y_bottom": tab.bbox[3],
-                        "col_count": len(tab.header.cells) if tab.header else 0
-                    })
-        except Exception as e:
-            print(f"页面 {page_num} 表格提取失败: {e}")
-            raise e
+                        if self._is_header_or_footer(text_block, page_height):
+                            continue
+                        # 过滤表格区域内的文本（避免重复）
+                        if self._is_in_table(span["bbox"], table_bboxes):
+                            continue
+                        text_blocks.append(text_block)
         
         # 按 y 坐标（从上到下）和 x 坐标（从左到右）排序文本块
         # 使用 y 坐标容差（5像素）来判断是否在同一行
@@ -407,6 +440,101 @@ class PDFChapterExtractor:
                 main_tables[section_title] = tables[0]   
         return main_tables
 
+    def _extract_core_title(self, title: str) -> str:
+        """
+        从章节标题中提取核心标题部分（去掉"第X节"等前缀）
+        
+        例如：
+        - "第九节 债券相关情况" -> "债券相关情况"
+        - "第一节 释义" -> "释义"
+        - "第三节 管理层讨论与分析" -> "管理层讨论与分析"
+        
+        :param title: 原始章节标题
+        :return: 核心标题部分
+        """
+        import re
+        # 匹配"第X节"或"第X章"等前缀，并提取后面的内容
+        patterns = [
+            r'^第[一二三四五六七八九十百千\d]+节\s*[、.\s]*\s*(.+)$',  # 第九节 债券相关情况
+            r'^第[一二三四五六七八九十百千\d]+章\s*[、.\s]*\s*(.+)$',  # 第一章 xxx
+            r'^\d+[、.\s]+(.+)$',  # 1. 释义 或 1、释义
+        ]
+        
+        for pattern in patterns:
+            match = re.match(pattern, title.strip())
+            if match:
+                return match.group(1).strip()
+        
+        # 如果没有匹配到前缀，返回原标题
+        return title.strip()
+
+    def _find_title_y_position(self, page_num: int, title: str) -> Optional[float]:
+        """
+        在指定页面中查找标题文本的 y 坐标位置
+        
+        支持以下匹配策略（按优先级排序）：
+        1. 完整标题匹配（如 "第九节 债券相关情况"）
+        2. 核心标题匹配（如 "债券相关情况"）
+        3. 部分匹配（标题包含在页面文本中）
+        
+        :param page_num: 页码（从0开始）
+        :param title: 标题文本
+        :return: 标题的 y_top 坐标，如果未找到则返回 None
+        """
+        if page_num < 0 or page_num >= len(self.doc):
+            return None
+        
+        page = self.doc[page_num]
+        blocks = page.get_text("dict")["blocks"]
+        
+        # 准备标题变体
+        clean_title = title.strip()
+        core_title = self._extract_core_title(clean_title)
+        
+        # 收集所有候选匹配
+        candidates = []
+        
+        for block in blocks:
+            if block["type"] == 0:  # text block
+                for line in block["lines"]:
+                    for span in line["spans"]:
+                        text = span["text"].strip()
+                        if not text:
+                            continue
+                        
+                        y_pos = span["bbox"][1]
+                        match_score = 0
+                        
+                        # 优先级1：完整标题完全匹配或页面文本以完整标题开头
+                        if text == clean_title or text.startswith(clean_title):
+                            match_score = 100
+                        # 优先级2：核心标题完全匹配或页面文本以核心标题开头
+                        elif text == core_title or text.startswith(core_title):
+                            match_score = 80
+                        # 优先级3：完整标题包含在页面文本中
+                        elif clean_title in text:
+                            match_score = 60
+                        # 优先级4：核心标题包含在页面文本中
+                        elif core_title in text and core_title != clean_title:
+                            match_score = 40
+                        # 优先级5：页面文本包含在标题中（较少见）
+                        elif text in clean_title and len(text) >= 3:
+                            match_score = 20
+                        
+                        if match_score > 0:
+                            candidates.append((match_score, y_pos, text))
+        
+        if not candidates:
+            return None
+        
+        # 按匹配分数降序排序，返回最高分的y坐标
+        candidates.sort(key=lambda x: x[0], reverse=True)
+        best_match = candidates[0]
+        
+        chapter_logger.debug(f"标题匹配: '{clean_title}' -> 找到 '{best_match[2]}' (分数: {best_match[0]}) at y={best_match[1]}")
+        
+        return best_match[1]
+
     def extract_all_chapters(
         self,
         save_md: bool = False,
@@ -460,19 +588,62 @@ class PDFChapterExtractor:
             content_parts = []
             content_parts.append(f"# {'#' * level} {title}\n")
             
+            # 获取起始页章节标题的 y 坐标（只提取标题下方的内容）
+            start_y = self._find_title_y_position(start_page, title)
+            
+            # 获取下一章节信息（用于确定结束页的裁剪位置）
+            next_chapter_title = None
+            next_chapter_page = None
+            next_chapter_y = None
+            
+            for next_idx, next_entry in enumerate(self.toc[toc_idx + 1:], start=toc_idx + 1):
+                if next_entry[0] <= level:  # 找到下一个同级或更高级别章节
+                    next_chapter_title = next_entry[1]
+                    next_chapter_page = next_entry[2] - 1
+                    # 获取下一章节标题的 y 坐标
+                    next_chapter_y = self._find_title_y_position(next_chapter_page, next_chapter_title)
+                    break
+            
             # 提取每页的文本和表格
             # 元素格式: (y_top, x_left, elem_type, data, page_num)
             all_elements = []
 
             for page_num in range(start_page, min(end_page + 1, total_pages)):
                 text_blocks, tables = self.extract_page_elements(page_num)
+                
+                # 确定当前页的有效 y 范围
+                page_min_y = None
+                page_max_y = None
+                
+                if page_num == start_page and start_y is not None:
+                    # 起始页：只提取标题下方的内容
+                    page_min_y = start_y
+                
+                if page_num == end_page:
+                    # 结束页：检查下一章节是否在本页开始
+                    if next_chapter_page is not None and next_chapter_page == end_page and next_chapter_y is not None:
+                        # 下一章节在本页开始，只提取到下一章节标题之前
+                        page_max_y = next_chapter_y
+                    # 否则提取到页面底部
 
-                # 添加文本块（已按 y 和 x 坐标排序）
+                # 添加文本块（根据 y 范围过滤）
                 for block in text_blocks:
+                    block_y = block["y_top"]
+                    # 检查是否在有效范围内
+                    if page_min_y is not None and block_y < page_min_y:
+                        continue
+                    if page_max_y is not None and block_y >= page_max_y:
+                        continue
                     all_elements.append((block["y_top"], block["bbox"][0], "text", block["text"], page_num))
 
-                # 添加表格
+                # 添加表格（根据 y 范围过滤）
                 for tab in tables:
+                    tab_y = tab["y_top"]
+                    # 检查是否在有效范围内
+                    if page_min_y is not None and tab_y < page_min_y:
+                        continue
+                    if page_max_y is not None and tab_y >= page_max_y:
+                        continue
                     table_data = tab["table"].extract()
                     table_md = self._table_to_markdown(table_data)
                     all_elements.append((tab["y_top"], tab["bbox"][0], "table", table_md, page_num))
