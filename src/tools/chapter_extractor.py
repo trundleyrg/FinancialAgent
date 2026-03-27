@@ -2,10 +2,14 @@
 chapter_extractor.py     # 负责识别和提取 PDF 指定章节
 
 使用fitz.open().get_toc()的方式定位章节位置和表格关系。
+支持异步并行解析以加快处理速度。
 """
 import re
 import fitz  # PyMuPDF
 from typing import List, Tuple, Dict, Optional
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from functools import partial
+import os
 
 from src.utils.logger import chapter_logger
 from src.db.table_models import TableWithHeader
@@ -535,28 +539,157 @@ class PDFChapterExtractor:
         
         return best_match[1]
 
+    @staticmethod
+    def _extract_single_chapter(args: Tuple) -> Optional[Dict]:
+        """
+        静态方法：提取单个章节的内容（用于进程池并行处理）
+        
+        :param args: 包含以下元素的元组：
+            - pdf_path: PDF 文件路径
+            - toc_idx: TOC 索引
+            - entry: TOC 条目 (level, title, page_num)
+            - toc_list: 完整 TOC 列表
+            - total_pages: 文档总页数
+        :return: 章节字典或 None
+        """
+        pdf_path, toc_idx, entry, toc_list, total_pages = args
+        level, title, start_page = entry[0], entry[1], entry[2] - 1
+        
+        # 在每个进程中独立打开文档（PyMuPDF 不是线程安全的）
+        try:
+            doc = fitz.open(pdf_path)
+        except Exception as e:
+            chapter_logger.error(f"无法打开 PDF 文件 {pdf_path}: {e}")
+            return None
+        
+        try:
+            # 确定结束页：下一个同级或更高层级的起始页，或文档末尾
+            end_page = total_pages - 1
+            for next_idx, next_entry in enumerate(toc_list[toc_idx + 1:], start=toc_idx + 1):
+                if next_entry[0] <= level:  # 同级或更高级别
+                    end_page = next_entry[2] - 2  # 前一页
+                    break
+            
+            chapter_logger.info(f"[并行] 提取章节: [{level}] {title}, 页码范围: {start_page}-{end_page}")
+            
+            # 创建临时 extractor 实例用于调用辅助方法
+            extractor = PDFChapterExtractor.__new__(PDFChapterExtractor)
+            extractor.doc = doc
+            extractor.toc = toc_list
+            extractor.page_heights = [page.rect.height for page in doc]
+            
+            # 提取章节内容
+            content_parts = []
+            content_parts.append(f"# {'#' * level} {title}\n")
+            
+            # 获取起始页章节标题的 y 坐标
+            start_y = extractor._find_title_y_position(start_page, title)
+            
+            # 获取下一章节信息
+            next_chapter_page = None
+            next_chapter_y = None
+            for next_idx, next_entry in enumerate(toc_list[toc_idx + 1:], start=toc_idx + 1):
+                if next_entry[0] <= level:
+                    next_chapter_page = next_entry[2] - 1
+                    next_chapter_y = extractor._find_title_y_position(next_chapter_page, next_entry[1])
+                    break
+            
+            # 提取每页的文本和表格
+            all_elements = []
+            for page_num in range(start_page, min(end_page + 1, total_pages)):
+                text_blocks, tables = extractor.extract_page_elements(page_num)
+                
+                # 确定当前页的有效 y 范围
+                page_min_y = None
+                page_max_y = None
+                
+                if page_num == start_page and start_y is not None:
+                    page_min_y = start_y
+                
+                if page_num == end_page:
+                    if next_chapter_page is not None and next_chapter_page == end_page and next_chapter_y is not None:
+                        page_max_y = next_chapter_y
+                
+                # 添加文本块
+                for block in text_blocks:
+                    block_y = block["y_top"]
+                    if page_min_y is not None and block_y < page_min_y:
+                        continue
+                    if page_max_y is not None and block_y >= page_max_y:
+                        continue
+                    all_elements.append((block["y_top"], block["bbox"][0], "text", block["text"], page_num))
+                
+                # 添加表格
+                for tab in tables:
+                    tab_y = tab["y_top"]
+                    if page_min_y is not None and tab_y < page_min_y:
+                        continue
+                    if page_max_y is not None and tab_y >= page_max_y:
+                        continue
+                    table_data = tab["table"].extract()
+                    table_md = extractor._table_to_markdown(table_data)
+                    all_elements.append((tab["y_top"], tab["bbox"][0], "table", table_md, page_num))
+            
+            # 排序并组装内容
+            def element_sort_key(elem):
+                y_top = elem[0]
+                x_left = elem[1]
+                page_num = elem[4]
+                y_group = round(y_top / 5)
+                return (page_num, y_group, x_left)
+            
+            all_elements.sort(key=element_sort_key)
+            
+            current_page = None
+            for y_top, x_left, elem_type, content, page_num in all_elements:
+                if current_page != page_num:
+                    current_page = page_num
+                content_parts.append(content)
+            
+            full_content = "\n\n".join(content_parts)
+            
+            chapter = {
+                "level": level,
+                "title": title,
+                "content": full_content,
+                "page_range": (start_page, end_page)
+            }
+            
+            return chapter
+            
+        except Exception as e:
+            chapter_logger.error(f"提取章节 '{title}' 时出错: {e}")
+            return None
+        finally:
+            doc.close()
+
     def extract_all_chapters(
         self,
         save_md: bool = False,
         output_dir: str = "data/output",
         min_level: int = 1,
-        max_level: int = 1
+        max_level: int = 1,
+        max_workers: Optional[int] = None,
+        use_parallel: bool = True
     ) -> List[Dict]:
         """
         按 TOC 的层级结构提取所有章节内容（文本+表格），保存为 chunk 文档。
         只提取 level 为 1 的一级章节。
+        支持并行处理以加快解析速度。
 
         :param save_md: 是否将每个章节保存为 .md 文件
         :param output_dir: .md 文件的输出目录（仅在 save_md=True 时有效）
         :param min_level: 提取的最小层级（默认为1，即只提取一级章节）
         :param max_level: 提取的最大层级（默认为1，即只提取一级章节）
+        :param max_workers: 并行工作进程数，默认为 CPU 核心数
+        :param use_parallel: 是否使用并行处理，默认为 True
         :return: 章节内容列表，每个元素为 {"level": int, "title": str, "content": str, "page_range": Tuple[int, int]}
         """
-        import os
         from pathlib import Path
         
         chapters = []
         total_pages = len(self.doc)
+        pdf_path = self.doc.name
         
         # 只提取 level 为 1 的 TOC 条目（一级章节）
         filtered_toc = [
@@ -572,120 +705,53 @@ class PDFChapterExtractor:
         if save_md:
             Path(output_dir).mkdir(parents=True, exist_ok=True)
         
-        for i, (toc_idx, entry) in enumerate(filtered_toc):
-            level, title, start_page = entry[0], entry[1], entry[2] - 1  # TOC 页码从1开始
+        if use_parallel and len(filtered_toc) > 1:
+            # 使用并行处理
+            chapter_logger.info(f"使用并行模式处理 {len(filtered_toc)} 个章节，工作进程数: {max_workers or 'CPU核心数'}")
             
-            # 确定结束页：下一个同级或更高层级的起始页，或文档末尾
-            end_page = total_pages - 1
-            for next_idx, next_entry in enumerate(self.toc[toc_idx + 1:], start=toc_idx + 1):
-                if next_entry[0] <= level:  # 同级或更高级别
-                    end_page = next_entry[2] - 2  # 前一页
-                    break
+            # 准备任务参数
+            task_args = [
+                (pdf_path, toc_idx, entry, self.toc, total_pages)
+                for toc_idx, entry in filtered_toc
+            ]
             
-            chapter_logger.info(f"提取章节: [{level}] {title}, 页码范围: {start_page}-{end_page}")
-            
-            # 提取章节内容
-            content_parts = []
-            content_parts.append(f"# {'#' * level} {title}\n")
-            
-            # 获取起始页章节标题的 y 坐标（只提取标题下方的内容）
-            start_y = self._find_title_y_position(start_page, title)
-            
-            # 获取下一章节信息（用于确定结束页的裁剪位置）
-            next_chapter_title = None
-            next_chapter_page = None
-            next_chapter_y = None
-            
-            for next_idx, next_entry in enumerate(self.toc[toc_idx + 1:], start=toc_idx + 1):
-                if next_entry[0] <= level:  # 找到下一个同级或更高级别章节
-                    next_chapter_title = next_entry[1]
-                    next_chapter_page = next_entry[2] - 1
-                    # 获取下一章节标题的 y 坐标
-                    next_chapter_y = self._find_title_y_position(next_chapter_page, next_chapter_title)
-                    break
-            
-            # 提取每页的文本和表格
-            # 元素格式: (y_top, x_left, elem_type, data, page_num)
-            all_elements = []
-
-            for page_num in range(start_page, min(end_page + 1, total_pages)):
-                text_blocks, tables = self.extract_page_elements(page_num)
+            # 使用进程池并行处理
+            with ProcessPoolExecutor(max_workers=max_workers) as executor:
+                futures = {executor.submit(self._extract_single_chapter, args): args for args in task_args}
                 
-                # 确定当前页的有效 y 范围
-                page_min_y = None
-                page_max_y = None
-                
-                if page_num == start_page and start_y is not None:
-                    # 起始页：只提取标题下方的内容
-                    page_min_y = start_y
-                
-                if page_num == end_page:
-                    # 结束页：检查下一章节是否在本页开始
-                    if next_chapter_page is not None and next_chapter_page == end_page and next_chapter_y is not None:
-                        # 下一章节在本页开始，只提取到下一章节标题之前
-                        page_max_y = next_chapter_y
-                    # 否则提取到页面底部
-
-                # 添加文本块（根据 y 范围过滤）
-                for block in text_blocks:
-                    block_y = block["y_top"]
-                    # 检查是否在有效范围内
-                    if page_min_y is not None and block_y < page_min_y:
-                        continue
-                    if page_max_y is not None and block_y >= page_max_y:
-                        continue
-                    all_elements.append((block["y_top"], block["bbox"][0], "text", block["text"], page_num))
-
-                # 添加表格（根据 y 范围过滤）
-                for tab in tables:
-                    tab_y = tab["y_top"]
-                    # 检查是否在有效范围内
-                    if page_min_y is not None and tab_y < page_min_y:
-                        continue
-                    if page_max_y is not None and tab_y >= page_max_y:
-                        continue
-                    table_data = tab["table"].extract()
-                    table_md = self._table_to_markdown(table_data)
-                    all_elements.append((tab["y_top"], tab["bbox"][0], "table", table_md, page_num))
-
-            # 按页码、y 坐标（从上到下）、x 坐标（从左到右）排序
-            # 使用 y 坐标容差（5像素）来判断是否在同一行
-            def element_sort_key(elem):
-                y_top = elem[0]
-                x_left = elem[1]
-                page_num = elem[4]
-                # 将 y 坐标分组，同一行（容差5px）的文本按 x 坐标排序
-                y_group = round(y_top / 5)
-                return (page_num, y_group, x_left)
-
-            all_elements.sort(key=element_sort_key)
+                for future in as_completed(futures):
+                    try:
+                        chapter = future.result()
+                        if chapter:
+                            chapters.append(chapter)
+                    except Exception as e:
+                        toc_idx, entry = futures[future][0], futures[future][1]
+                        chapter_logger.error(f"处理章节 '{entry[1]}' 时出错: {e}")
             
-            # 组装内容
-            current_page = None
-            for y_top, x_left, elem_type, content, page_num in all_elements:
-                if current_page != page_num:
-                    current_page = page_num
-                content_parts.append(content)
+            # 按 TOC 顺序排序结果
+            chapters.sort(key=lambda x: next(
+                (i for i, (idx, entry) in enumerate(filtered_toc) if entry[1] == x["title"]),
+                float('inf')
+            ))
             
-            # 合并内容
-            full_content = "\n\n".join(content_parts)
+        else:
+            # 使用串行处理
+            chapter_logger.info(f"使用串行模式处理 {len(filtered_toc)} 个章节")
             
-            chapter = {
-                "level": level,
-                "title": title,
-                "content": full_content,
-                "page_range": (start_page, end_page)
-            }
-            chapters.append(chapter)
-            
-            # 保存为 md 文件
-            if save_md:
-                # 清理文件名中的非法字符
-                safe_title = re.sub(r'[\\/*?:"<>|]', '_', title)
+            for toc_idx, entry in filtered_toc:
+                args = (pdf_path, toc_idx, entry, self.toc, total_pages)
+                chapter = self._extract_single_chapter(args)
+                if chapter:
+                    chapters.append(chapter)
+        
+        # 保存为 md 文件
+        if save_md:
+            for chapter in chapters:
+                safe_title = re.sub(r'[\\/*?:"<>|]', '_', chapter["title"])
                 md_path = os.path.join(output_dir, f"{safe_title}.md")
                 
                 with open(md_path, "w", encoding="utf-8") as f:
-                    f.write(full_content)
+                    f.write(chapter["content"])
                 
                 chapter_logger.info(f"已保存章节到: {md_path}")
         
