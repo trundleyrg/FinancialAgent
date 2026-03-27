@@ -212,8 +212,16 @@ class PDFChapterExtractor:
             print(f"页面 {page_num} 表格提取失败: {e}")
             raise e
         
-        # 按y坐标排序文本块（从上到下）
-        text_blocks.sort(key=lambda b: b["y_top"])
+        # 按 y 坐标（从上到下）和 x 坐标（从左到右）排序文本块
+        # 使用 y 坐标容差（5像素）来判断是否在同一行
+        def sort_key(block):
+            y_top = block["y_top"]
+            x_left = block["bbox"][0]
+            # 将 y 坐标分组，同一行（容差5px）的文本按 x 坐标排序
+            y_group = round(y_top / 5)
+            return (y_group, x_left)
+
+        text_blocks.sort(key=sort_key)
         tables.sort(key=lambda t: t["y_top"])
         
         return text_blocks, tables
@@ -398,6 +406,162 @@ class PDFChapterExtractor:
             else:
                 main_tables[section_title] = tables[0]   
         return main_tables
+
+    def extract_all_chapters(
+        self,
+        save_md: bool = False,
+        output_dir: str = "data/output",
+        min_level: int = 1,
+        max_level: int = 1
+    ) -> List[Dict]:
+        """
+        按 TOC 的层级结构提取所有章节内容（文本+表格），保存为 chunk 文档。
+        只提取 level 为 1 的一级章节。
+
+        :param save_md: 是否将每个章节保存为 .md 文件
+        :param output_dir: .md 文件的输出目录（仅在 save_md=True 时有效）
+        :param min_level: 提取的最小层级（默认为1，即只提取一级章节）
+        :param max_level: 提取的最大层级（默认为1，即只提取一级章节）
+        :return: 章节内容列表，每个元素为 {"level": int, "title": str, "content": str, "page_range": Tuple[int, int]}
+        """
+        import os
+        from pathlib import Path
+        
+        chapters = []
+        total_pages = len(self.doc)
+        
+        # 只提取 level 为 1 的 TOC 条目（一级章节）
+        filtered_toc = [
+            (idx, entry) for idx, entry in enumerate(self.toc)
+            if entry[0] == 1
+        ]
+
+        if not filtered_toc:
+            chapter_logger.warning("TOC 中未找到 level 为 1 的一级章节")
+            return chapters
+        
+        # 创建输出目录
+        if save_md:
+            Path(output_dir).mkdir(parents=True, exist_ok=True)
+        
+        for i, (toc_idx, entry) in enumerate(filtered_toc):
+            level, title, start_page = entry[0], entry[1], entry[2] - 1  # TOC 页码从1开始
+            
+            # 确定结束页：下一个同级或更高层级的起始页，或文档末尾
+            end_page = total_pages - 1
+            for next_idx, next_entry in enumerate(self.toc[toc_idx + 1:], start=toc_idx + 1):
+                if next_entry[0] <= level:  # 同级或更高级别
+                    end_page = next_entry[2] - 2  # 前一页
+                    break
+            
+            chapter_logger.info(f"提取章节: [{level}] {title}, 页码范围: {start_page}-{end_page}")
+            
+            # 提取章节内容
+            content_parts = []
+            content_parts.append(f"# {'#' * level} {title}\n")
+            
+            # 提取每页的文本和表格
+            # 元素格式: (y_top, x_left, elem_type, data, page_num)
+            all_elements = []
+
+            for page_num in range(start_page, min(end_page + 1, total_pages)):
+                text_blocks, tables = self.extract_page_elements(page_num)
+
+                # 添加文本块（已按 y 和 x 坐标排序）
+                for block in text_blocks:
+                    all_elements.append((block["y_top"], block["bbox"][0], "text", block["text"], page_num))
+
+                # 添加表格
+                for tab in tables:
+                    table_data = tab["table"].extract()
+                    table_md = self._table_to_markdown(table_data)
+                    all_elements.append((tab["y_top"], tab["bbox"][0], "table", table_md, page_num))
+
+            # 按页码、y 坐标（从上到下）、x 坐标（从左到右）排序
+            # 使用 y 坐标容差（5像素）来判断是否在同一行
+            def element_sort_key(elem):
+                y_top = elem[0]
+                x_left = elem[1]
+                page_num = elem[4]
+                # 将 y 坐标分组，同一行（容差5px）的文本按 x 坐标排序
+                y_group = round(y_top / 5)
+                return (page_num, y_group, x_left)
+
+            all_elements.sort(key=element_sort_key)
+            
+            # 组装内容
+            current_page = None
+            for y_top, x_left, elem_type, content, page_num in all_elements:
+                if current_page != page_num:
+                    current_page = page_num
+                content_parts.append(content)
+            
+            # 合并内容
+            full_content = "\n\n".join(content_parts)
+            
+            chapter = {
+                "level": level,
+                "title": title,
+                "content": full_content,
+                "page_range": (start_page, end_page)
+            }
+            chapters.append(chapter)
+            
+            # 保存为 md 文件
+            if save_md:
+                # 清理文件名中的非法字符
+                safe_title = re.sub(r'[\\/*?:"<>|]', '_', title)
+                md_path = os.path.join(output_dir, f"{safe_title}.md")
+                
+                with open(md_path, "w", encoding="utf-8") as f:
+                    f.write(full_content)
+                
+                chapter_logger.info(f"已保存章节到: {md_path}")
+        
+        chapter_logger.info(f"共提取 {len(chapters)} 个章节")
+        return chapters
+    
+    def _table_to_markdown(self, table_data: List[List[str]]) -> str:
+        """
+        将表格数据转换为 Markdown 格式
+        
+        :param table_data: 二维列表，表格数据
+        :return: Markdown 格式的表格字符串
+        """
+        if not table_data:
+            return ""
+        
+        # 清理单元格内容中的换行符
+        cleaned_data = []
+        for row in table_data:
+            cleaned_row = [str(cell).replace('\n', ' ').strip() if cell else "" for cell in row]
+            cleaned_data.append(cleaned_row)
+        
+        # 计算每列最大宽度
+        if not cleaned_data:
+            return ""
+        
+        col_count = max(len(row) for row in cleaned_data)
+        
+        # 构建Markdown表格
+        lines = []
+        
+        # 表头
+        if cleaned_data:
+            header = cleaned_data[0]
+            # 补齐列数
+            while len(header) < col_count:
+                header.append("")
+            lines.append("| " + " | ".join(header) + " |")
+            lines.append("| " + " | ".join(["---"] * col_count) + " |")
+            
+            # 数据行
+            for row in cleaned_data[1:]:
+                while len(row) < col_count:
+                    row.append("")
+                lines.append("| " + " | ".join(row) + " |")
+        
+        return "\n".join(lines)
 
     def close(self):
         self.doc.close()
