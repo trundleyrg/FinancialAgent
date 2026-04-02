@@ -693,14 +693,17 @@ def _parse_table_data_to_model_data(table_data: List[List[str]], model_class: Ty
 
         # 尝试找到对应的字段名
         field_name = None
+        # 移除 item_name 中的换行符以便匹配
+        item_name_normalized = item_name.replace('\n', '')
         for help_text, fn in field_help_text_map.items():
-            if help_text in item_name or item_name in help_text:
+            if help_text in item_name_normalized or item_name_normalized in help_text:
                 field_name = fn
                 break
 
         # 如果没找到，尝试直接匹配字段名（忽略大小写和下划线）
         if not field_name:
-            normalized_item = item_name.replace(' ', '').replace('_', '').lower()
+            # 移除空格、下划线和换行符
+            normalized_item = item_name.replace(' ', '').replace('_', '').replace('\n', '').lower()
             for fn in fields.keys():
                 normalized_field = fn.replace('_', '').lower()
                 if normalized_field in normalized_item or normalized_item in normalized_field:

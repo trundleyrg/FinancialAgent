@@ -170,10 +170,10 @@ class ConsolidatedBalanceSheet(Model):
     total_liabilities = FloatField(null=True, help_text="负债合计")  # 负债合计
 
     # 所有者权益
-    paid_in_capital = FloatField(null=True, help_text="实收资本")  # 实收资本
+    paid_in_capital = FloatField(null=True, help_text="实收资本（或股本）")  # 实收资本（或股本）
     other_equity_instruments = FloatField(null=True, help_text="其他权益工具")  # 其他权益工具
-    preferred_stock_equity = FloatField(null=True, help_text="其中：优先股（权益）")  # 其中：优先股
-    perpetual_bonds_equity = FloatField(null=True, help_text="永续债（权益）")  # 永续债
+    preferred_stock_equity = FloatField(null=True, help_text="其中：优先股")  # 其中：优先股
+    perpetual_bonds_equity = FloatField(null=True, help_text="永续债")  # 永续债
     capital_reserve = FloatField(null=True, help_text="资本公积")  # 资本公积
     treasury_stock = FloatField(null=True, help_text="减：库存股")  # 减：库存股
     other_comprehensive_income = FloatField(null=True, help_text="其他综合收益")  # 其他综合收益
@@ -181,10 +181,10 @@ class ConsolidatedBalanceSheet(Model):
     surplus_reserve = FloatField(null=True, help_text="盈余公积")  # 盈余公积
     general_risk_reserve = FloatField(null=True, help_text="一般风险准备")  # 一般风险准备
     retained_earnings = FloatField(null=True, help_text="未分配利润")  # 未分配利润
-    total_equity_attributable_to_parent_company = FloatField(null=True, help_text="归属于母公司所有者权益")  # 归属于母公司所有者权益
+    total_equity_attributable_to_parent_company = FloatField(null=True, help_text="归属于母公司所有者权益（或股东权益）合计")  # 归属于母公司所有者权益（或股东权益）合计
     minority_interest = FloatField(null=True, help_text="少数股东权益")  # 少数股东权益
-    total_owners_equity = FloatField(null=True, help_text="所有者权益")  # 所有者权益
-    total_liabilities_and_owners_equity = FloatField(null=True, help_text="负债和所有者权益")  # 负债和所有者权益
+    total_owners_equity = FloatField(null=True, help_text="所有者权益（或股东权益）合计")  # 所有者权益（或股东权益）合计
+    total_liabilities_and_owners_equity = FloatField(null=True, help_text="负债和所有者权益（或股东权益）总计")  # 负债和所有者权益（或股东权益）总计
 
     class Meta:
         database = db
@@ -279,7 +279,7 @@ class ParentCompanyBalanceSheet(Model):
     total_liabilities = FloatField(null=True, help_text="负债合计")  # 负债合计
 
     # 所有者权益
-    paid_in_capital = FloatField(null=True, help_text="实收资本")  # 实收资本
+    paid_in_capital = FloatField(null=True, help_text="实收资本（或股本）")  # 实收资本（或股本）
     other_equity_instruments = FloatField(null=True, help_text="其他权益工具")  # 其他权益工具
     preferred_stock_equity = FloatField(null=True, help_text="其中：优先股")  # 其中：优先股
     perpetual_bonds_equity = FloatField(null=True, help_text="永续债")  # 永续债
@@ -289,8 +289,8 @@ class ParentCompanyBalanceSheet(Model):
     special_reserve = FloatField(null=True, help_text="专项储备")  # 专项储备
     surplus_reserve = FloatField(null=True, help_text="盈余公积")  # 盈余公积
     retained_earnings = FloatField(null=True, help_text="未分配利润")  # 未分配利润
-    total_owners_equity = FloatField(null=True, help_text="所有者权益")  # 所有者权益
-    total_liabilities_and_owners_equity = FloatField(null=True, help_text="负债和所有者权益")  # 负债和所有者权益
+    total_owners_equity = FloatField(null=True, help_text="所有者权益（或股东权益）合计")  # 所有者权益（或股东权益）合计
+    total_liabilities_and_owners_equity = FloatField(null=True, help_text="负债和所有者权益（或股东权益）总计")  # 负债和所有者权益（或股东权益）总计
 
     class Meta:
         database = db
