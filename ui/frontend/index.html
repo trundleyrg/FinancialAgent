@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>财务报告分析系统</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <header class="header">
+        <div class="header-content">
+            <div class="logo">FinancialAgent</div>
+            <nav class="nav-tabs">
+                <button class="nav-tab active" id="parser-tab">PDF上传与解析</button>
+                <button class="nav-tab" id="query-tab">数据查询</button>
+            </nav>
+        </div>
+    </header>
+
+    <main class="container">
+        <!-- PDF Parser Tab -->
+        <div id="parser-content" class="tab-content active">
+            <div class="card">
+                <h2 class="card-header">📄 PDF财务报告上传与解析</h2>
+                <p style="color: var(--text-secondary); margin-bottom: 20px;">
+                    上传PDF财务报告文件，系统将自动提取主要财务报表（资产负债表、利润表、现金流量表）并保存到数据库
+                </p>
+
+                <div class="grid grid-2">
+                    <div>
+                        <div class="form-group">
+                            <label class="form-label">数据库类型</label>
+                            <select id="db-type" class="form-select">
+                                <option value="duckdb" selected>DuckDB (本地)</option>
+                                <option value="postgresql">PostgreSQL</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group">
+                            <label class="form-label">上传PDF文件</label>
+                            <div id="upload-area" class="file-upload">
+                                <div class="file-upload-icon">📁</div>
+                                <div class="file-upload-text">点击或拖拽PDF文件到此处</div>
+                                <input type="file" id="file-input" accept=".pdf">
+                            </div>
+                        </div>
+
+                        <button id="process-btn" class="btn btn-primary" style="width: 100%;">
+                            开始解析
+                        </button>
+                    </div>
+
+                    <div>
+                        <div id="parser-result"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Results Section -->
+            <div id="parser-loading" class="loading">
+                <div class="spinner"></div>
+                <p>正在处理PDF文件，请稍候...</p>
+            </div>
+
+            <div id="company-info-section" style="display: none;">
+                <div class="card">
+                    <h3 class="card-header">🏢 公司信息</h3>
+                    <div id="company-info"></div>
+                </div>
+
+                <div class="card">
+                    <h3 class="card-header">📊 提取的财务报表列表</h3>
+                    <div id="tables-list"></div>
+                </div>
+
+                <div class="card">
+                    <h3 class="card-header">⬇️ 下载Excel文件</h3>
+                    <p style="color: var(--text-secondary); margin-bottom: 16px;">点击下方按钮下载各个报表的Excel文件</p>
+                    <div id="download-links"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Database Query Tab -->
+        <div id="query-content" class="tab-content">
+            <div class="card">
+                <h2 class="card-header">🔍 财务数据查询</h2>
+                <p style="color: var(--text-secondary); margin-bottom: 20px;">
+                    选择公司、年份和报告周期来查询财务数据
+                </p>
+
+                <div class="grid grid-3">
+                    <div class="form-group">
+                        <label class="form-label">数据库类型</label>
+                        <select id="query-db-type" class="form-select">
+                            <option value="duckdb" selected>DuckDB (本地)</option>
+                            <option value="postgresql">PostgreSQL</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">选择公司</label>
+                        <select id="company-select" class="form-select">
+                            <option value="">加载中...</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">选择年份</label>
+                        <select id="year-select" class="form-select">
+                            <option value="">加载中...</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="form-group" style="max-width: 400px;">
+                    <label class="form-label">选择报告周期</label>
+                    <select id="period-select" class="form-select">
+                        <option value="">请先选择公司和年份</option>
+                    </select>
+                </div>
+
+                <button id="query-btn" class="btn btn-primary">
+                    查询数据
+                </button>
+            </div>
+
+            <div id="query-loading" class="loading">
+                <div class="spinner"></div>
+                <p>正在查询数据，请稍候...</p>
+            </div>
+
+            <div id="query-result"></div>
+        </div>
+    </main>
+
+    <script src="/static/js/app.js"></script>
+</body>
+</html>

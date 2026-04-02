@@ -800,5 +800,71 @@ class PDFChapterExtractor:
         
         return "\n".join(lines)
 
+    def _extract_table_units(self, table_data: List[List[str]]) -> Tuple[str, Dict[int, str]]:
+        """
+        从表格数据中提取单位信息
+
+        表格的单位信息通常出现在以下位置：
+        1. 表头行中的括号内，如 "金额（万元）"、"比率（%）"
+        2. 表头行中的"单位："或"金额单位："等标注
+        3. 第一列的项目名称中包含单位
+
+        :param table_data: 表格数据（二维列表）
+        :return: (整体单位, 每列单位字典) 整体单位为空字符串表示无统一单位
+        """
+        if not table_data or len(table_data) == 0:
+            return "", {}
+
+        # 常见的单位模式
+        unit_patterns = [
+            r'（([^）]+)）',  # 中文括号：金额（万元）
+            r'\(([^)]+)\)',  # 英文括号：Amount(USD)
+            r'单位[：:]\s*([^，,。\n]+)',  # 单位：万元
+            r'金额单位[：:]\s*([^，,。\n]+)',  # 金额单位：万元
+        ]
+
+        overall_unit = ""  # 整体单位（如表格通用的"万元"）
+        column_units: Dict[int, str] = {}  # 每列的具体单位
+
+        # 获取表头行（通常是第一行）
+        header_row = table_data[0] if table_data else []
+
+        # 首先检查表头行是否有整体单位标注（如"金额（万元）"）
+        header_text = " ".join(str(cell) for cell in header_row)
+
+        for pattern in unit_patterns:
+            matches = re.findall(pattern, header_text)
+            if matches:
+                # 取最长的匹配作为单位（避免短单位被长单位包含）
+                longest_match = max(matches, key=len)
+                if longest_match.strip() and longest_match not in ["", "0"]:
+                    # 检查是否是有效的单位
+                    if any(u in longest_match for u in ["万", "亿", "元", "%", "比率", "比例", "USD", "HKD", "EUR"]):
+                        overall_unit = longest_match.strip()
+                        break
+
+        # 检查每列的单位（通常是第二行或表头行中的括号内容）
+        if len(table_data) > 1:
+            second_row = table_data[1]
+            for col_idx, cell in enumerate(second_row):
+                cell_text = str(cell).strip()
+                for pattern in unit_patterns:
+                    matches = re.findall(pattern, cell_text)
+                    if matches:
+                        for match in matches:
+                            if match.strip() and match not in ["", "0"]:
+                                if any(u in match for u in ["万", "亿", "元", "%", "USD", "HKD", "EUR"]):
+                                    column_units[col_idx] = match.strip()
+                                    break
+
+        # 如果没有找到列单位，但有整体单位，则所有数值列使用整体单位
+        if not column_units and overall_unit:
+            # 假设从第二列开始是数值列
+            for col_idx in range(1, len(header_row)):
+                column_units[col_idx] = overall_unit
+
+        chapter_logger.debug(f"提取表格单位: 整体={overall_unit}, 列单位={column_units}")
+        return overall_unit, column_units
+
     def close(self):
         self.doc.close()
