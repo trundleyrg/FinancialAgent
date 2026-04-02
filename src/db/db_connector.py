@@ -856,7 +856,8 @@ def filter_table_by_period(
         page_start_num=table_obj.page_start_num,
         page_end_num=table_obj.page_end_num,
         bbox=table_obj.bbox,
-        is_merged=table_obj.is_merged
+        is_merged=table_obj.is_merged,
+        unit=table_obj.unit,
     )
 
     db_logger.info(

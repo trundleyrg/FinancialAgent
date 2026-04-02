@@ -372,6 +372,17 @@ class PDFChapterExtractor:
                     j += 1
                 else:
                     break
+
+            # 从 header_text 中提取单位（货币单位，如千元、万元、美元等）
+            # 匹配 "单位：XXX 币种" 的模式，排除"编制单位"
+            unit_match = re.search(r'(?<!编制)单位[：:]\s*([千百万美港元欧元\d元]+)', current.header_text)
+            if unit_match and not current.unit:
+                current.unit = unit_match.group(1).strip()
+            #
+            currency_match = re.search(r'币种[：:]\s*([A-Za-z人民币港元美元欧元]+)', current.header_text)
+            if currency_match and not current.currency:
+                current.currency = currency_match.group(1).strip()
+
             merged_tables.append(current)
             i = j  # 跳过已合并的表格
         
@@ -399,7 +410,7 @@ class PDFChapterExtractor:
                 new_header_text = "\n".join(bottom_text_blocks)  # 使用最后3个文本块
                 # 更新第一个表格的表头
                 merged_tables[0].header_text = new_header_text + merged_tables[0].header_text
-        
+
         return merged_tables
     
     def extract_section_tables(self, section_title: str, section_level: int = 1) -> List[TableWithHeader]:
