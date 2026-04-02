@@ -1,0 +1,1 @@
+from .analysis.cyclical_stock_agent import create_cyclical_analysis
