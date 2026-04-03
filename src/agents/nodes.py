@@ -9,10 +9,72 @@ from typing import Callable, Dict, Any
 import logging
 
 from src.agents.state import FinancialState
+from src.agents.tools.db_tools import check_company_data_availability
 from src.tools.chapter_extractor import PDFChapterExtractor
 from src.db.db_connector import get_db
 
 logger = logging.getLogger("Agent.Coordinator")
+
+
+def create_check_data_availability_node(years: int = 10) -> Callable:
+    """
+    创建数据可用性检查节点
+
+    Args:
+        years: 检查近 N 年的数据，默认 10 年
+
+    Returns:
+        检查数据可用性的节点函数
+    """
+
+    def check_data_availability_node(state: FinancialState) -> FinancialState:
+        """
+        检查数据可用性节点
+
+        检查数据库中是否存在该公司近 N 年的数据
+        """
+        company_name = state.get("company_name")
+        stock_code = state.get("stock_code")
+
+        if not company_name:
+            logger.error("缺少公司名称，无法检查数据可用性")
+            return {
+                "status": "error",
+                "error_msg": "缺少公司名称"
+            }
+
+        logger.info(f"检查数据可用性: {company_name} ({stock_code}), 近 {years} 年")
+
+        try:
+            # 调用数据检查工具
+            result = check_company_data_availability(
+                company_name=company_name,
+                stock_code=stock_code,
+                years=years
+            )
+
+            has_data = result.get("has_data", False)
+            data_coverage = result.get("data_coverage", 0)
+            available_years = result.get("available_years", [])
+
+            logger.info(f"数据可用性检查完成: has_data={has_data}, coverage={data_coverage:.0%}, 可用年份={available_years}")
+
+            return {
+                "data_availability": result,
+                "status": "processing"
+            }
+
+        except Exception as e:
+            logger.error(f"检查数据可用性失败: {e}")
+            return {
+                "data_availability": {
+                    "has_data": False,
+                    "error": str(e)
+                },
+                "status": "processing"  # 继续执行，让后续节点处理
+            }
+
+    return check_data_availability_node
 
 
 def create_parse_pdf_node() -> Callable:
@@ -222,6 +284,7 @@ def get_coordinator_nodes() -> Dict[str, Callable]:
         协调器节点字典
     """
     return {
+        "check_data_availability": create_check_data_availability_node(),
         "parse_pdf": create_parse_pdf_node(),
         "extract_financial_data": create_extract_financial_data_node(),
         "save_to_database": create_save_to_database_node()
