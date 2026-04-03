@@ -196,9 +196,9 @@ class CNInfoReportDownloader:
         # 下载PDF
         success_count = 0
         for report in reports:
-            # 清理文件名
-            clean_title = re.sub(r'[<>:"/\\|?*]', '', report['title'])
-            filename = f"{stock_code}_{report['year']}_{clean_title}.pdf"
+            # 清理公司简称中的非法字符
+            clean_name = re.sub(r'[<>:"/\\|?*]', '', stock_info['name'])
+            filename = f"{clean_name}_{stock_code}_{report['year']}.pdf"
             
             if self.download_pdf(report['adjunctUrl'], save_dir, filename):
                 success_count += 1
@@ -214,11 +214,10 @@ def main():
     downloader = CNInfoReportDownloader()
     
     # 东阿阿胶股票代码: 000423
-    # stock_code = "000423"
-    stock_code = "688349"
+    stock_code = "000423"
 
-    # 下载2020-2024年度报告（2025年的年报要到2026年才发布）
-    years = ["2020", "2021", "2022", "2023", "2024", "2025"]
+    # 下载过去十年的年度报告
+    years = list(range(2015, 2026))
     
     # 保存目录
     project_root = os.path.dirname(os.path.dirname(__file__))
