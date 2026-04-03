@@ -51,7 +51,7 @@ class CNInfoReportDownloader:
                         'plate': plate,
                         'column': column,
                         'code': stock_code,
-                        'name': stock.get('name', '')
+                        'name': stock.get('zwjc', '')
                     }
             
             print(f"未找到股票代码 {stock_code} 的信息")
@@ -64,53 +64,71 @@ class CNInfoReportDownloader:
         """查询年度报告列表"""
         reports = []
         url = "http://www.cninfo.com.cn/new/hisAnnouncement/query"
-        
+
         for year in years:
-            # 年度报告通常在次年1-4月发布，所以搜索时间范围设为次年
-            search_year = int(year) + 1
-            se_date = f"{search_year}-01-01~{search_year}-06-30"
-            
-            data = {
-                'pageNum': '1',
-                'pageSize': '30',
-                'tabName': 'fulltext',
-                'stock': f'{stock_code},{org_id}',
-                'seDate': se_date,
-                'column': column,
-                'category': 'category_ndbg_szsh',  # 年度报告
-                'isHLtitle': 'true',
-                'sortName': 'time',
-                'sortType': 'desc',
-                'plate': plate,
-                'searchkey': '',
-                'secid': '',
-            }
-            
-            try:
-                resp = self.session.post(url, data=data, headers=self.headers, timeout=15)
-                resp.raise_for_status()
-                result = resp.json()
-                
-                announcements = result.get('announcements', [])
-                for ann in announcements:
-                    title = ann.get('announcementTitle', '')
-                    # 过滤掉摘要、英文版等
-                    if self._is_valid_annual_report(title, year):
-                        reports.append({
-                            'title': title,
-                            'year': year,
-                            'adjunctUrl': ann.get('adjunctUrl', ''),
-                            'announcementId': ann.get('announcementId', ''),
-                            'secName': ann.get('secName', ''),
-                            'announcementTime': ann.get('announcementTime', ''),
-                        })
-                        print(f"  找到 {year} 年度报告: {title}")
-                
-                time.sleep(0.5)  # 避免请求过快
-                
-            except Exception as e:
-                print(f"查询 {year} 年度报告失败: {e}")
-                
+            found_valid = False
+
+            # 首先在当年搜索，如果找到已取消的报告，则在后一年继续搜索
+            for search_year in [int(year) + 1, int(year) + 2]:  # 先搜次年，再搜第三年
+                if found_valid:
+                    break
+
+                se_date = f"{search_year}-01-01~{search_year}-12-31"  # 扩大搜索范围到全年
+
+                data = {
+                    'pageNum': '1',
+                    'pageSize': '30',
+                    'tabName': 'fulltext',
+                    'stock': f'{stock_code},{org_id}',
+                    'seDate': se_date,
+                    'column': column,
+                    'category': 'category_ndbg_szsh',  # 年度报告
+                    'isHLtitle': 'true',
+                    'sortName': 'time',
+                    'sortType': 'desc',
+                    'plate': plate,
+                    'searchkey': '',
+                    'secid': '',
+                }
+
+                try:
+                    resp = self.session.post(url, data=data, headers=self.headers, timeout=15)
+                    resp.raise_for_status()
+                    result = resp.json()
+
+                    announcements = result.get('announcements', [])
+                    if not announcements:
+                        print(f"  {search_year}年未找到任何公告")
+                    for ann in announcements:
+                        title = ann.get('announcementTitle', '')
+
+                        # 检查是否已取消
+                        if "已取消" in title:
+                            print(f"  {year} 年度报告已取消，继续寻找...")
+                            continue
+
+                        # 检查是否是有效的年度报告
+                        if self._is_valid_annual_report(title, year):
+                            reports.append({
+                                'title': title,
+                                'year': year,
+                                'adjunctUrl': ann.get('adjunctUrl', ''),
+                                'announcementId': ann.get('announcementId', ''),
+                                'secName': ann.get('secName', ''),
+                                'announcementTime': ann.get('announcementTime', ''),
+                            })
+                            print(f"  找到 {year} 年度报告: {title} (来源: {search_year}年)")
+                            found_valid = True
+                            break
+
+                    time.sleep(0.5)  # 避免请求过快
+
+                except Exception as e:
+                    print(f"查询 {year} 年度报告失败: {e}")
+
+            if not found_valid:
+                print(f"  未找到 {year} 年度有效报告")
+
         return reports
     
     def _is_valid_annual_report(self, title: str, year: str) -> bool:
@@ -210,7 +228,7 @@ class CNInfoReportDownloader:
 
 
 def main():
-    """主函数 - 下载东阿阿胶2020-2025年度报告"""
+    """主函数 - 下载年度报告"""
     downloader = CNInfoReportDownloader()
     
     # 东阿阿胶股票代码: 000423
