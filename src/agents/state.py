@@ -27,6 +27,9 @@ class FinancialState(TypedDict):
     report_year: Optional[int]            # 报告年份
     report_period: Optional[str]          # 报告周期 (Q1/H1/Q3/FY)
 
+    # ========== 数据可用性检查结果 ==========
+    data_availability: Optional[Dict[str, Any]]  # 数据库中近十年数据可用性
+
     # ========== 分析结果（由各 Agent 填充） ==========
     # 周期股分析结果
     cyclical_analysis: Optional[Dict[str, Any]]

@@ -133,8 +133,7 @@ class CNInfoReportDownloader:
     
     def _is_valid_annual_report(self, title: str, year: str) -> bool:
         """判断是否是有效的年度报告"""
-        title_lower = title.lower()
-        year_in_title = str(year) in title or f"{int(year)+1}" in title
+        title = title.lower()
         
         # 排除无效的报告
         exclude_keywords = ['摘要', '英文', '已取消', '季度', '半年度', '半年报', 
@@ -239,17 +238,20 @@ def main():
     
     # 保存目录
     project_root = os.path.dirname(os.path.dirname(__file__))
-    save_dir = os.path.join(project_root, 'data', stock_code)
     
     print("=" * 60)
     print("巨潮资讯网年度报告下载器")
     print("=" * 60)
     print(f"股票代码: {stock_code}")
     print(f"年份范围: {years}")
-    print(f"保存目录: {save_dir}")
+    
     print("=" * 60)
     
-    downloader.download_reports(stock_code, years, save_dir)
+    # todo: 支持code或name查询
+    downloader.download_reports(stock_code, years, project_root)
+
+    save_dir = os.path.join(project_root, 'data', stock_code)
+    print(f"保存目录: {save_dir}")
 
 
 if __name__ == "__main__":

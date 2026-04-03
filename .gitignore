@@ -10,7 +10,6 @@ __pycache__/
 *.pdf
 *.duckdb
 data/output/
-docs/
 data/excel/
 data/temp/
 
