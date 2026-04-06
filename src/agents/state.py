@@ -6,6 +6,10 @@ from typing import Annotated, List, TypedDict, Optional, Dict, Any
 from operator import add
 
 
+# 股票类型枚举
+STOCK_TYPES = ["dividend", "cyclical", "growth", "value", "defensive"]
+
+
 class FinancialState(TypedDict):
     """
     定义 FinancialAgent 的状态结构
@@ -27,12 +31,36 @@ class FinancialState(TypedDict):
     report_year: Optional[int]            # 报告年份
     report_period: Optional[str]          # 报告周期 (Q1/H1/Q3/FY)
 
+    # ========== 公司业务信息 ==========
+    business_scope: Optional[str]         # 公司经营范围描述
+
     # ========== 数据可用性检查结果 ==========
     data_availability: Optional[Dict[str, Any]]  # 数据库中近十年数据可用性
 
+    # ========== 股票类型判断 ==========
+    # 股票类型分类结果（多选）
+    # - dividend: 红利股（高分红、稳定收益）
+    # - cyclical: 周期股（受经济周期影响大）
+    # - growth: 成长股（高增长、高估值）
+    # - value: 价值股（低估值、稳定）
+    # - defensive: 防御股（必需品消费、医疗等）
+    stock_types: Annotated[List[str], add]
+
     # ========== 分析结果（由各 Agent 填充） ==========
+    # 红利股分析结果
+    dividend_analysis: Optional[Dict[str, Any]]
+
     # 周期股分析结果
     cyclical_analysis: Optional[Dict[str, Any]]
+
+    # 成长股分析结果
+    growth_analysis: Optional[Dict[str, Any]]
+
+    # 价值股分析结果
+    value_analysis: Optional[Dict[str, Any]]
+
+    # 防御股分析结果
+    defensive_analysis: Optional[Dict[str, Any]]
 
     # 基本面分析结果
     fundamental_analysis: Optional[Dict[str, Any]]
