@@ -1,0 +1,40 @@
+# 数据库
+peewee==3.17.6
+sqlalchemy==2.0.46
+psycopg2-binary==2.9.11
+psycopg2==2.9.11
+duckdb==1.4.10
+duckdb-engine==0.17.0
+
+# 数据处理和导出
+pandas==3.0.1
+openpyxl==3.2.0
+numpy>=1.26.0
+
+# PDF 处理
+pymupdf==1.26.0
+pdfplumber==0.11.8
+reportlab==4.4.10
+fitz==0.0.1.dev2
+
+# 数据验证
+pydantic==2.12.5
+
+# LangGraph / LangChain
+langgraph==1.0.10
+langchain==0.3.79
+langchain-openai==0.2.41
+langchain-core>=0.1
+
+# UI
+gradio==6.8.0
+
+# 工具
+python-dotenv==1.2.2
+
+# 开发依赖
+pytest==8.3.4
+pytest-cov==5.0.0
+black==24.10.0
+ruff==0.15.5
+mypy==1.13.0
