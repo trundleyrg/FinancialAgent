@@ -83,7 +83,7 @@ def main():
     main_logger.info("开始处理 PDF 文件...")
     
     # 获取 data/raw_pdfs 目录下的所有 PDF 文件
-    pdf_dir = Path("data/raw_pdfs")
+    pdf_dir = Path("data/000423")
     if not pdf_dir.exists():
         main_logger.error(f"目录 {pdf_dir} 不存在")
         return

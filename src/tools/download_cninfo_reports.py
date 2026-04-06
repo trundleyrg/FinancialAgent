@@ -305,9 +305,9 @@ class CNInfoReportDownloader:
         print(f"\n股票信息: {stock_info['code']} {stock_info['name']}")
         print(f"orgId: {stock_info['orgId']}, 板块: {stock_info['plate']}")
         
-        # 设置保存目录（使用股票代码命名）
-        if save_dir is None:
-            save_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data', stock_info['code'])
+        # 固定保存路径: 项目根目录/data/{code}/
+        project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+        save_dir = os.path.join(project_root, 'data', stock_info['code'])
 
         os.makedirs(save_dir, exist_ok=True)
         logger.info(f"保存目录: {save_dir}")
@@ -388,3 +388,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+    # .\script\download_report.bat "东阿阿胶" -y 2015-2026
