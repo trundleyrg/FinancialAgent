@@ -13,11 +13,15 @@ import os
 
 from src.utils.logger import chapter_logger
 from src.db.table_models import TableWithHeader
+from src.tools.toc_fallback_parser import parse_toc_fallback
 
 class PDFChapterExtractor:
     def __init__(self, pdf_path: str):
         self.doc = fitz.open(pdf_path)
         self.toc = self.doc.get_toc()
+        if not self.toc:
+            chapter_logger.info(f"[TOC] 内置 TOC 为空，尝试使用 fallback 解析器")
+            self.toc = parse_toc_fallback(pdf_path)
         self.page_heights = [page.rect.height for page in self.doc]
         
     def get_company_info(self):
@@ -59,22 +63,21 @@ class PDFChapterExtractor:
                 break
         
         # 查找公司代码，通常在文档中以"证券代码"、"股票代码"等形式出现
-        for line in lines:
-            line = line.strip()
+        for line_idx, line in enumerate(lines):
+            line_stripped = line.strip()
             # 匹配证券代码、股票代码等
-            code_matches = re.search(r'(?:证券代码|股票代码|代码)[:：\s]*([0-9]{6})', line)
+            code_matches = re.search(r'(?:证券代码|股票代码|代码)[:：\s]*([0-9]{6})', line_stripped)
             if code_matches:
                 company_code = code_matches.group(1)
                 break
             # 也可能在公司名称附近直接出现6位数字代码
-            if company_name and company_name in line:
-                nearby_lines = [line]
-                line_idx = lines.index(line)
+            if company_name and company_name in line_stripped:
+                nearby_lines = [line_stripped]
                 if line_idx > 0:
-                    nearby_lines.append(lines[line_idx - 1])
+                    nearby_lines.append(lines[line_idx - 1].strip())
                 if line_idx < len(lines) - 1:
-                    nearby_lines.append(lines[line_idx + 1])
-                
+                    nearby_lines.append(lines[line_idx + 1].strip())
+
                 for near_line in nearby_lines:
                     code_match = re.search(r'([0-9]{6})', near_line)
                     if code_match and code_match.group(1) != '000000':  # 排除无效代码
