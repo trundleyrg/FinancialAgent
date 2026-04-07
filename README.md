@@ -5,7 +5,8 @@
 ## 技术架构
 
 - **Python 3.12+**: 主要开发语言
-- **LangGraph**: Agent 图形化编排框架
+- **LangGraph / LangChain**: Agent 图形化编排框架
+- **LangChain OpenAI**: AI 模型接口（支持 OpenAI、DeepSeek 等）
 - **Peewee ORM**: 数据库 ORM 框架
 - **PostgreSQL/DuckDB**: 支持两种数据库
 - **Gradio**: Web UI 界面
@@ -33,7 +34,8 @@ FinancialAgent/
 │   │   └── table_models.py   # Peewee 数据库表模型
 │   ├── utils/
 │   │   ├── __init__.py
-│   │   └── logger.py         # 日志管理
+│   │   ├── logger.py         # 日志管理
+│   │   └── llm_client.py     # AI 客户端（基于 LangChain OpenAI）
 │   └── config.py             # 环境变量与配置信息
 ├── ui/
 │   ├── app.py                # Gradio 主界面入口
