@@ -2,18 +2,27 @@
 """
 AI 客户端模块
 
-基于 LiteLLM 的统一 AI 模型接口
-支持 100+ AI 提供商（OpenAI、DeepSeek、Gemini、Claude、国内模型等）
+基于 LangChain OpenAI 的统一 AI 模型接口
+支持 OpenAI、DeepSeek、Azure 等兼容 ChatML 的模型
 """
 
 import os
-from typing import Any, Dict, List
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Union
 
-from litellm import completion
+from dotenv import load_dotenv
+from langchain_openai import ChatOpenAI
+from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage, AIMessage
+from langchain_core.outputs import ChatGeneration, ChatResult
+
+# 加载 .env 文件（项目根目录）
+_env_path = Path(__file__).parent.parent.parent / ".env"
+if _env_path.exists():
+    load_dotenv(_env_path)
 
 
 class AIClient:
-    """统一的 AI 客户端（基于 LiteLLM）"""
+    """统一的 AI 客户端（基于 LangChain OpenAI）"""
 
     def __init__(self, config: Dict[str, Any]):
         """
@@ -21,23 +30,45 @@ class AIClient:
 
         Args:
             config: AI 配置字典
-                - MODEL: 模型标识（格式: provider/model_name）
+                - MODEL: 模型标识（格式: provider/model_name 或模型名称）
+                   支持: gpt-4, gpt-3.5-turbo, deepseek-chat, etc.
                 - API_KEY: API 密钥
-                - API_BASE: API 基础 URL（可选）
-                - TEMPERATURE: 采样温度
+                - API_BASE: API 基础 URL（可选，用于代理或兼容 API）
+                - TEMPERATURE: 采样温度 (0.0-2.0)
                 - MAX_TOKENS: 最大生成 token 数
                 - TIMEOUT: 请求超时时间（秒）
-                - NUM_RETRIES: 重试次数（可选）
-                - FALLBACK_MODELS: 备用模型列表（可选）
+                - MAX_RETRIES: 最大重试次数
         """
-        self.model = config.get("MODEL", "deepseek/deepseek-chat")
-        self.api_key = config.get("API_KEY") or os.environ.get("AI_API_KEY", "")
-        self.api_base = config.get("API_BASE", "")
-        self.temperature = config.get("TEMPERATURE", 1.0)
-        self.max_tokens = config.get("MAX_TOKENS", 5000)
+        self.model_name = config.get("MODEL") or os.environ.get("MODEL", "gpt-3.5-turbo")
+        self.api_key = config.get("API_KEY") or os.environ.get("API_KEY", "")
+        self.api_base = config.get("API_BASE") or os.environ.get("AI_API_BASE", "")
+        self.temperature = config.get("TEMPERATURE", 0.7)
+        self.max_tokens = config.get("MAX_TOKENS", 4096)
         self.timeout = config.get("TIMEOUT", 120)
-        self.num_retries = config.get("NUM_RETRIES", 2)
-        self.fallback_models = config.get("FALLBACK_MODELS", [])
+        self.max_retries = config.get("MAX_RETRIES", 3)
+
+        # 初始化 LangChain ChatOpenAI 客户端
+        self._init_llm()
+
+    def _init_llm(self):
+        """初始化 LangChain LLM 实例"""
+        llm_params: Dict[str, Any] = {
+            "model": self.model_name,
+            "temperature": self.temperature,
+            "max_tokens": self.max_tokens if self.max_tokens > 0 else None,
+            "max_retries": self.max_retries,
+            "request_timeout": self.timeout,
+        }
+
+        # 添加 API Key（如果有）
+        if self.api_key:
+            llm_params["api_key"] = self.api_key
+
+        # 添加 API Base（如果有，用于代理或兼容 API）
+        if self.api_base:
+            llm_params["base_url"] = self.api_base
+
+        self.llm = ChatOpenAI(**llm_params)
 
     def chat(
         self,
@@ -50,6 +81,9 @@ class AIClient:
         Args:
             messages: 消息列表，格式: [{"role": "system/user/assistant", "content": "..."}]
             **kwargs: 额外参数，会覆盖默认配置
+                - temperature: 采样温度
+                - max_tokens: 最大 token 数
+                - stop: 停止词列表
 
         Returns:
             str: AI 响应内容
@@ -57,49 +91,56 @@ class AIClient:
         Raises:
             Exception: API 调用失败时抛出异常
         """
-        # 构建请求参数
-        params = {
-            "model": self.model,
-            "messages": messages,
-            "temperature": kwargs.get("temperature", self.temperature),
-            "timeout": kwargs.get("timeout", self.timeout),
-            "num_retries": kwargs.get("num_retries", self.num_retries),
-        }
+        # 将字典格式的消息转换为 LangChain 消息对象
+        langchain_messages = self._convert_messages(messages)
 
-        # 添加 API Key
-        if self.api_key:
-            params["api_key"] = self.api_key
+        # 构建调用参数
+        call_params: Dict[str, Any] = {}
+        if "temperature" in kwargs:
+            call_params["temperature"] = kwargs["temperature"]
+        if "max_tokens" in kwargs:
+            call_params["max_tokens"] = kwargs["max_tokens"]
+        if "stop" in kwargs:
+            call_params["stop"] = kwargs["stop"]
 
-        # 添加 API Base（如果配置了）
-        if self.api_base:
-            params["api_base"] = self.api_base
-
-        # 添加 max_tokens（如果配置了且不为 0）
-        max_tokens = kwargs.get("max_tokens", self.max_tokens)
-        if max_tokens and max_tokens > 0:
-            params["max_tokens"] = max_tokens
-
-        # 添加 fallback 模型（如果配置了）
-        if self.fallback_models:
-            params["fallbacks"] = self.fallback_models
-
-        # 合并其他额外参数
-        for key, value in kwargs.items():
-            if key not in params:
-                params[key] = value
-
-        # 调用 LiteLLM
-        response = completion(**params)
+        # 调用 LangChain LLM
+        response: ChatResult = self.llm.invoke(langchain_messages, **call_params)
 
         # 提取响应内容
-        # 某些模型/提供商返回 list（内容块）而非 str，统一转为 str
-        content = response.choices[0].message.content
-        if isinstance(content, list):
-            content = "\n".join(
-                item.get("text", str(item)) if isinstance(item, dict) else str(item)
-                for item in content
-            )
+        if isinstance(response, ChatResult):
+            content = response.generations[0].message.content
+        else:
+            content = response.content if hasattr(response, 'content') else str(response)
+
         return content or ""
+
+    def _convert_messages(self, messages: List[Dict[str, str]]) -> List[BaseMessage]:
+        """
+        将字典格式消息转换为 LangChain 消息对象
+
+        Args:
+            messages: [{"role": "system/user/assistant", "content": "..."}]
+
+        Returns:
+            List[BaseMessage]: LangChain 消息对象列表
+        """
+        langchain_messages: List[BaseMessage] = []
+
+        for msg in messages:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+
+            if role == "system":
+                langchain_messages.append(SystemMessage(content=content))
+            elif role == "user":
+                langchain_messages.append(HumanMessage(content=content))
+            elif role == "assistant":
+                langchain_messages.append(AIMessage(content=content))
+            else:
+                # 未知角色默认为用户消息
+                langchain_messages.append(HumanMessage(content=content))
+
+        return langchain_messages
 
     def validate_config(self) -> tuple[bool, str]:
         """
@@ -108,14 +149,28 @@ class AIClient:
         Returns:
             tuple: (是否有效, 错误信息)
         """
-        if not self.model:
+        if not self.model_name:
             return False, "未配置 AI 模型（model）"
 
-        if not self.api_key:
-            return False, "未配置 AI API Key，请在 config.yaml 或环境变量 AI_API_KEY 中设置"
-
-        # 验证模型格式（应该包含 provider/model）
-        if "/" not in self.model:
-            return False, f"模型格式错误: {self.model}，应为 'provider/model' 格式（如 'deepseek/deepseek-chat'）"
+        if not self.api_key and not self.api_base:
+            return False, "未配置 AI API Key，请在环境变量 API_KEY 或 AI_API_BASE 中设置"
 
         return True, ""
+
+    def get_model_name(self) -> str:
+        """获取当前配置的模型名称"""
+        return self.model_name
+    
+if __name__ == "__main__":
+    # 创建 AI 模型实例
+    ai_client = AIClient({
+        "TEMPERATURE": 0.7,
+        "MAX_TOKENS": 4096,
+        "TIMEOUT": 120,
+        "MAX_RETRIES": 3
+    })
+    res = ai_client.chat([
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "你好"}
+    ])
+    print(res)
