@@ -104,15 +104,23 @@ class AIClient:
             call_params["stop"] = kwargs["stop"]
 
         # 调用 LangChain LLM
-        response: ChatResult = self.llm.invoke(langchain_messages, **call_params)
+        try:
+            response: ChatResult = self.llm.invoke(langchain_messages, **call_params)
 
-        # 提取响应内容
-        if isinstance(response, ChatResult):
-            content = response.generations[0].message.content
-        else:
-            content = response.content if hasattr(response, 'content') else str(response)
+            # 提取响应内容
+            if isinstance(response, ChatResult):
+                content = response.generations[0].message.content
+            else:
+                content = response.content if hasattr(response, 'content') else str(response)
 
-        return content or ""
+            return content or ""
+        except TimeoutError as e:
+            return f"请求超时，请稍后重试: {str(e)}"
+        except Exception as e:
+            error_msg = str(e)
+            if "timeout" in error_msg.lower() or "timed out" in error_msg.lower():
+                return f"请求超时，请稍后重试: {error_msg}"
+            return f"AI 调用失败: {error_msg}"
 
     def _convert_messages(self, messages: List[Dict[str, str]]) -> List[BaseMessage]:
         """
