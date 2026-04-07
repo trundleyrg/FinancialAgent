@@ -266,26 +266,49 @@ class PDFChapterExtractor:
         
         return text_blocks, tables
 
-    def associate_header_with_table(self, text_blocks: List[Dict], table: Dict, 
-                                   header_search_range: float = 80.0) -> str:
+    def _get_page_top_text(self, text_blocks: List[Dict], table: Dict, page_height: float, top_ratio: float = 0.3) -> str:
         """
-        为表格关联最近的表头文本
-        :param header_search_range: 向上搜索表头的最大距离（像素）
+        获取表格所在页面上方指定比例高度的文本（用于构建表头）
+        :param text_blocks: 页面所有文本块
+        :param table: 表格信息
+        :param page_height: 页面高度
+        :param top_ratio: 页面顶部区域比例（默认10%）
+        :return: 表头文本，按从上到下排列
         """
         table_top = table["y_top"]
+        top_threshold = page_height * top_ratio
+
+        # 获取表格上方top_ratio高度区域内的所有文本
         candidates = []
-        
-        for block in reversed(text_blocks):  # 从表格向上搜索
-            if block["y_bottom"] < table_top and table_top - block["y_bottom"] <= header_search_range:
+        for block in text_blocks:
+            block_bottom = block["y_bottom"]
+            block_top = block["y_top"]
+            if block_bottom <= table_top and block_top >= table_top - top_threshold:
                 candidates.append(block)
-            if block["y_bottom"] < table_top - header_search_range:
-                break
-        
-        # 按垂直距离排序，取最近的5个文本块
-        candidates.sort(key=lambda b: table_top - b["y_bottom"])
-        header_texts = [c["text"] for c in candidates[:5] if c["text"]][::-1]  # 从上到下排列
-        
-        return " ".join(header_texts).strip() if header_texts else "（未找到表头）"
+
+        # 按 y_top 从上到下排序
+        candidates.sort(key=lambda b: b["y_top"])
+
+        # 按行分组：同一行（y_top 相近，容差5px）的文本块按 x 坐标拼接
+        rows: Dict[int, List[Dict]] = {}
+        y_tolerance = 5
+        for block in candidates:
+            if not block["text"]:
+                continue
+            y_group = round(block["y_top"] / y_tolerance)
+            if y_group not in rows:
+                rows[y_group] = []
+            rows[y_group].append(block)
+
+        # 按行排序，每行内按 x_left 排序后拼接
+        header_lines = []
+        for y_group in sorted(rows.keys()):
+            row_blocks = rows[y_group]
+            row_blocks.sort(key=lambda b: b["bbox"][0])
+            row_text = "".join(b["text"] for b in row_blocks)
+            header_lines.append(row_text)
+
+        return "\n".join(header_lines).strip() if header_lines else "（未找到表头）"
 
     def should_merge_tables(self, table1: Dict, table2: Dict, 
                            page1_height: float, page2_height: float,
@@ -329,8 +352,8 @@ class PDFChapterExtractor:
         for page_num in range(start_page, end_page + 1):
             text_blocks, tables = self.extract_page_elements(page_num)
             for tab in tables:
-                header = self.associate_header_with_table(
-                    text_blocks, tab, self.page_heights[page_num]
+                header = self._get_page_top_text(
+                    text_blocks, tab, self.page_heights[page_num], top_ratio=0.1
                 )
                 raw_tables.append(TableWithHeader(
                     table_data=tab["table"].extract(),  # 二维列表
@@ -436,7 +459,7 @@ class PDFChapterExtractor:
             "母公司利润表": [3],
             "合并现金流量表": [3],
             "母公司现金流量表": [3],
-            "股份变动情况表": [3]
+            "股份变动情况": [3]
         }
         # 提取主要报表
         for section_title in main_tables.keys():
@@ -450,7 +473,7 @@ class PDFChapterExtractor:
                         main_tables[section_title] = table
                         break
                 if not find_table:
-                    chapter_logger.info(f"未找到{section_title}表")
+                    chapter_logger.info(f"未找到{section_title}")
             elif len(tables) < 1:
                 main_tables[section_title] = None
                 chapter_logger.info(f"未找到{section_title}表")
