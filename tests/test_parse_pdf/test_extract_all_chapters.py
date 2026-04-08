@@ -31,7 +31,7 @@ class TestExtractAllChapters:
     """章节提取测试类"""
 
     # 测试 PDF 文件路径
-    TEST_PDF_PATH = "./data/raw_pdfs/佰仁医疗_2023.pdf"
+    TEST_PDF_PATH = "./data/000423/东阿阿胶_000423_2018.pdf"
 
     # 输出目录
     OUTPUT_DIR = "./data/output/test_chapters"

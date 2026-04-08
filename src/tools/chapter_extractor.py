@@ -905,3 +905,10 @@ class PDFChapterExtractor:
 
     def close(self):
         self.doc.close()
+
+if __name__ == "__main__":
+    pdf_path = "./data/000423/东阿阿胶_000423_2018.pdf"
+    # pdf_path = "./data/000423/东阿阿胶_000423_2017.pdf"
+    parser = PDFChapterExtractor(pdf_path)
+    parser.extract_main_tables()
+

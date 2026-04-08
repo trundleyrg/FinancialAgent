@@ -18,20 +18,33 @@ class TOCFallbackParser:
     page: 页码（从1开始，与 get_toc() 保持一致）
     """
 
-    # 常见的一级章节关键词
-    LEVEL_1_KEYWORDS = [
-        "第一节", "第二节", "第三节", "第四节", "第五节", "第六节", "第七节", "第八节",
-        "第九节", "第十节", "第十一节", "第十二节",
-        "第一章", "第二章", "第三章", "第四章", "第五章", "第六章", "第七章", "第八章",
-        "第九章", "第十章", "第十一章", "第十二章",
-        "一、", "二、", "三、", "四、", "五、", "六、", "七、", "八、", "九、", "十、",
-    ]
+    # 使用正则表达式匹配各级别章节标题
+    # 一级章节: 第一节、第二节、...、第十二节、第十三节...
+    LEVEL_1_PATTERN = re.compile(
+        r'^第([一二三四五六七八九十百千零\d]+)节\s+(.+?)$'
+    )
 
-    # 常见的二级章节关键词
-    LEVEL_2_KEYWORDS = [
-        "1.", "2.", "3.", "4.", "5.", "6.", "7.", "8.", "9.", "10.",
-        "（一）", "（二）", "（三）", "（四）", "（五）", "（六）", "（七）", "（八）", "（九）", "（十）",
-        "(一)", "(二)", "(三)", "(四)", "(五)", "(六)", "(七)", "(八)", "(九)", "(十)",
+    # 二级章节: 一、二、三、...、十、十一、...
+    LEVEL_2_PATTERN = re.compile(
+        r'^([一二三四五六七八九十百千零]+、\s+)$'
+    )
+
+    # 三级章节: 1、2、3、...、10、11、...
+    LEVEL_3_PATTERN = re.compile(
+        r'^(\d+、.+?)$'
+    )
+
+    # 四级章节: （1）、（2）、...、（10）、... 或 (1)、(2)、...
+    LEVEL_4_PATTERN = re.compile(
+        r'^[\（\(]([^）\)]+)[\）\)]\s*(.+?)$'
+    )
+
+    # 章节标题级别映射
+    CHAPTER_PATTERNS = [
+        (1, LEVEL_1_PATTERN),
+        (2, LEVEL_2_PATTERN),
+        (3, LEVEL_3_PATTERN),
+        (4, LEVEL_4_PATTERN),
     ]
 
     def __init__(self, pdf_path: str):
@@ -44,14 +57,14 @@ class TOCFallbackParser:
         执行 TOC 解析主流程
         :return: [[level, title, page], ...]
         """
-        # 策略1: 查找"目录"页
-        toc_entries = self._find_toc_page()
-        if toc_entries:
-            chapter_logger.info(f"[TOC Fallback] 通过目录页解析到 {len(toc_entries)} 个条目")
-            self.toc = toc_entries
-            return self.toc
+        # # 策略1: 查找"目录"页
+        # toc_entries = self._find_toc_page()
+        # if toc_entries:
+        #     chapter_logger.info(f"[TOC Fallback] 通过目录页解析到 {len(toc_entries)} 个条目")
+        #     self.toc = toc_entries
+        #     return self.toc
 
-        # 策略2: 扫描前20页寻找章节标题
+        # 策略2: 扫描全文寻找章节标题
         toc_entries = self._scan_chapter_titles()
         if toc_entries:
             chapter_logger.info(f"[TOC Fallback] 通过扫描章节标题解析到 {len(toc_entries)} 个条目")
@@ -70,7 +83,7 @@ class TOCFallbackParser:
         for page_num in range(min(10, len(self.doc))):
             page = self.doc[page_num]
             text = page.get_text()
-            text_lower = text.lower()
+            text = text.lower()
 
             # 检查是否是目录页
             if any(kw in text for kw in ["目录", "TABLE OF CONTENTS", " CONTENTS ", "索引", "INDEX"]):
@@ -103,7 +116,7 @@ class TOCFallbackParser:
 
     def _parse_toc_line(self, line: str, base_page: int) -> Optional[Tuple[int, str, int]]:
         """
-        解析单行目录条目
+        使用正则表达式解析单行目录条目
         支持格式:
         - "第一节 释义" -> 1, "释义", 页码
         - "1. 释义" -> 1, "释义", 页码
@@ -115,41 +128,34 @@ class TOCFallbackParser:
         if not line:
             return None
 
-        level = 0
-        title = ""
+        # 遍历各级别正则表达式进行匹配
+        for level, pattern in self.CHAPTER_PATTERNS:
+            match = pattern.match(line)
+            if match:
+                groups = match.groups()
 
-        # 检测一级章节
-        for kw in self.LEVEL_1_KEYWORDS:
-            if line.startswith(kw):
-                level = 1
-                # 提取章节编号后的标题
-                # 例如: "第一节 释义" -> "释义"
-                # 例如: "一、公司简介" -> "公司简介"
-                title = line[len(kw):].strip()
-                if title.startswith("、") or title.startswith("."):
-                    title = title[1:].strip()
-                break
+                # 提取标题
+                if level == 1:
+                    title = groups[1].strip() if len(groups) > 1 else ""
+                    page = int(groups[2]) if len(groups) > 2 and groups[2] else self._extract_page_number(line, base_page)
+                elif level == 2:
+                    title = groups[1].strip() if len(groups) > 1 else ""
+                    page = int(groups[2]) if len(groups) > 2 and groups[2] else self._extract_page_number(line, base_page)
+                elif level == 3:
+                    title = groups[1].strip() if len(groups) > 1 else ""
+                    page = int(groups[2]) if len(groups) > 2 and groups[2] else self._extract_page_number(line, base_page)
+                elif level == 4:
+                    title = groups[1].strip() if len(groups) > 1 else ""
+                    page = int(groups[2]) if len(groups) > 2 and groups[2] else self._extract_page_number(line, base_page)
+                else:
+                    continue
 
-        # 检测二级章节
-        if level == 0:
-            for kw in self.LEVEL_2_KEYWORDS:
-                if line.startswith(kw):
-                    level = 2
-                    title = line[len(kw):].strip()
-                    if title.startswith("、") or title.startswith("."):
-                        title = title[1:].strip()
-                    break
+                if not title:
+                    return None
 
-        if level == 0:
-            return None
+                return (level, title, page)
 
-        if not title:
-            return None
-
-        # 尝试提取页码
-        page = self._extract_page_number(line, base_page)
-
-        return (level, title, page)
+        return None
 
     def _extract_page_number(self, line: str, base_page: int) -> int:
         """
@@ -185,40 +191,35 @@ class TOCFallbackParser:
 
     def _scan_chapter_titles(self) -> List[Tuple[int, str, int]]:
         """
-        扫描 PDF 前 N 页，寻找章节标题模式
+        扫描 PDF 所有页面，使用正则表达式匹配章节标题
         :return: [(level, title, page), ...]
         """
         entries = []
-        # 扫描前30页寻找章节标题
-        scan_limit = min(30, len(self.doc))
 
-        for page_num in range(scan_limit):
+        for page_num in range(len(self.doc)):
             page = self.doc[page_num]
-            blocks = page.get_text("dict")["blocks"]
+            text = page.get_text()
 
-            for block in blocks:
-                if block["type"] != 0:  # 只处理文本块
+            # 按行处理文本
+            lines = text.split('\n')
+            for line in lines:
+                line = line.strip()
+                if not line:
                     continue
 
-                for line in block["lines"]:
-                    for span in line["spans"]:
-                        text = span["text"].strip()
-                        if not text:
-                            continue
+                entry = self._try_parse_chapter_title(line, page_num + 1)
+                if entry:
+                    # 避免重复条目
+                    if entry not in entries:
+                        entries.append(entry)
 
-                        entry = self._try_parse_chapter_title(text, page_num + 1)
-                        if entry:
-                            # 避免重复条目
-                            if entry not in entries:
-                                entries.append(entry)
-
-        # 按页码和位置排序
-        entries.sort(key=lambda x: (x[2], x[1]))
+        # 按页码和级别排序
+        entries.sort(key=lambda x: (x[2], x[0]))
         return entries
 
     def _try_parse_chapter_title(self, text: str, page_num: int) -> Optional[Tuple[int, str, int]]:
         """
-        尝试将文本解析为章节标题
+        使用正则表达式解析章节标题
         :param text: 文本内容
         :param page_num: 页码（从1开始）
         :return: (level, title, page) 或 None
@@ -227,46 +228,48 @@ class TOCFallbackParser:
         if not text:
             return None
 
-        level = 0
-        title = ""
+        # 遍历各级别正则表达式进行匹配
+        for level, pattern in self.CHAPTER_PATTERNS:
+            match = pattern.match(text)
+            if match:
+                groups = match.groups()
 
-        # 检测一级章节
-        for kw in self.LEVEL_1_KEYWORDS:
-            if text.startswith(kw):
-                level = 1
-                title = text[len(kw):].strip()
-                if title.startswith("、") or title.startswith("."):
-                    title = title[1:].strip()
-                break
+                # 根据不同级别提取标题和页码
+                if level == 1:
+                    # 第一组是章节编号，第二组是标题，第三组是页码（可选）
+                    title = groups[1].strip() if len(groups) > 1 else ""
+                    page = int(groups[2]) if len(groups) > 2 and groups[2] else page_num
+                elif level == 2:
+                    title = groups[1].strip() if len(groups) > 1 else ""
+                    page = int(groups[2]) if len(groups) > 2 and groups[2] else page_num
+                elif level == 3:
+                    title = groups[1].strip() if len(groups) > 1 else ""
+                    page = int(groups[2]) if len(groups) > 2 and groups[2] else page_num
+                elif level == 4:
+                    # 第一组是编号内容，第二组是标题，第三组是页码（可选）
+                    title = groups[1].strip() if len(groups) > 1 else ""
+                    page = int(groups[2]) if len(groups) > 2 and groups[2] else page_num
+                else:
+                    continue
 
-        # 检测二级章节
-        if level == 0:
-            for kw in self.LEVEL_2_KEYWORDS:
-                if text.startswith(kw):
-                    level = 2
-                    title = text[len(kw):].strip()
-                    if title.startswith("、") or title.startswith("."):
-                        title = title[1:].strip()
-                    break
+                # 过滤无效标题
+                if not title or len(title) < 1:
+                    continue
 
-        if level == 0:
-            return None
+                # 过滤掉明显不是章节标题的内容
+                skip_patterns = [
+                    r'^\d+$',  # 纯数字
+                    r'^[a-zA-Z]+$',  # 纯字母
+                    r'^\d+\.\d+',  # 小数
+                    r'^第\d+页',  # 页码标注
+                ]
+                for skip_pattern in skip_patterns:
+                    if re.match(skip_pattern, title):
+                        return None
 
-        if not title or len(title) < 2:
-            return None
+                return (level, text, page)
 
-        # 过滤掉明显不是章节标题的内容
-        skip_patterns = [
-            r'^\d+$',  # 纯数字
-            r'^[a-zA-Z]+$',  # 纯字母
-            r'^\d+\.\d+',  # 小数
-            r'^第\d+页',  # 页码标注
-        ]
-        for pattern in skip_patterns:
-            if re.match(pattern, title):
-                return None
-
-        return (level, title, page_num)
+        return None
 
     def close(self):
         self.doc.close()
