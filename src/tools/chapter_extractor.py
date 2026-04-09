@@ -129,11 +129,11 @@ class PDFChapterExtractor:
         # 查找起始页
         for index, entry in enumerate(self.toc):
             if section_level is None and section_title in entry[1]:
-                start_page = entry[2] - 1
+                start_page = entry[2]
                 section_level = entry[0]  # 没有给定section_level时，启用模糊查找
                 break
             elif entry[0] == section_level and section_title in entry[1]:
-                start_page = entry[2] - 1
+                start_page = entry[2]
                 break
         if section_level is None:
             raise ValueError(f"文档中查找不到章节: {section_title}")
@@ -141,7 +141,7 @@ class PDFChapterExtractor:
         # 在start_page之后，寻找下一个entry[0]==1的页数
         for index in range(1, len(toc_list)):
             if toc_list[index][0] == section_level:
-                end_page = toc_list[index][2] - 1
+                end_page = toc_list[index][2]
                 break
         if start_page is None:
             raise ValueError(f"未找到章节: {section_title}")
@@ -217,7 +217,7 @@ class PDFChapterExtractor:
         tables = []
         try:
             # strategy=1: 只检测有线条边框的表格
-            tabs = page.find_tables()
+            tabs = page.find_tables(strategy="lines_strict")
             for tab in tabs:
                 if tab.header and tab.cells:  # 有效表格
                     table_bboxes.append(tab.bbox)
