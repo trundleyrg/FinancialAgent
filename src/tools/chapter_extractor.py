@@ -305,6 +305,24 @@ class PDFChapterExtractor:
             row_text = "".join(b["text"] for b in row_blocks)
             header_lines.append(row_text)
 
+        # 当header_lines为空或行数过少时，从页面原始文本获取表格上方的内容
+        # （绕过extract_page_elements的页眉过滤，避免章节标题被误过滤）
+        if len(header_lines) < 2:
+            page = self.doc[page_num]
+            page_dict = page.get_text("dict")
+            raw_lines = []
+            for block in page_dict["blocks"]:
+                if block["type"] == 0:
+                    for line in block["lines"]:
+                        line_text = "".join(span["text"].strip() for span in line["spans"] if span["text"].strip())
+                        if not line_text:
+                            continue
+                        y_top = line["spans"][0]["bbox"][1] if line["spans"] else 0
+                        if y_top < table_top:
+                            raw_lines.append((y_top, line_text))
+            raw_lines.sort(key=lambda x: x[0])
+            header_lines = [line_text for _, line_text in raw_lines[-5:] if line_text]
+
         # 当header_lines为空时，取上一页最下面的五行文本作为header_lines
         if not header_lines and page_num > 1:
             pre_text_blocks, _ = self.extract_page_elements(page_num - 1)
