@@ -18,10 +18,10 @@ from src.tools.toc_fallback_parser import parse_toc_fallback
 class PDFChapterExtractor:
     def __init__(self, pdf_path: str):
         self.doc = fitz.open(pdf_path)
-        self.toc = self.doc.get_toc()
-        if not self.toc:
-            chapter_logger.info(f"[TOC] 内置 TOC 为空，尝试使用 fallback 解析器")
-            self.toc = parse_toc_fallback(pdf_path)
+        # self.toc = self.doc.get_toc()
+        # if not self.toc:
+            # chapter_logger.info(f"[TOC] 内置 TOC 为空，尝试使用 fallback 解析器")
+        self.toc = parse_toc_fallback(pdf_path)
         self.page_heights = [page.rect.height for page in self.doc]
         
     def get_company_info(self):
@@ -216,6 +216,7 @@ class PDFChapterExtractor:
         table_bboxes = []
         tables = []
         try:
+            # strategy=1: 只检测有线条边框的表格
             tabs = page.find_tables()
             for tab in tabs:
                 if tab.header and tab.cells:  # 有效表格
@@ -266,25 +267,18 @@ class PDFChapterExtractor:
         
         return text_blocks, tables
 
-    def _get_page_top_text(self, text_blocks: List[Dict], table: Dict, page_height: float, top_ratio: float = 0.3) -> str:
+    def _get_page_top_text(self, text_blocks: List[Dict], table: Dict, page_num: int) -> str:
         """
-        获取表格所在页面上方指定比例高度的文本（用于构建表头）
+        获取表格上方五行文本作为表头
         :param text_blocks: 页面所有文本块
         :param table: 表格信息
-        :param page_height: 页面高度
-        :param top_ratio: 页面顶部区域比例（默认10%）
+        :param page_num: 页码
         :return: 表头文本，按从上到下排列
         """
         table_top = table["y_top"]
-        top_threshold = page_height * top_ratio
 
-        # 获取表格上方top_ratio高度区域内的所有文本
-        candidates = []
-        for block in text_blocks:
-            block_bottom = block["y_bottom"]
-            block_top = block["y_top"]
-            if block_bottom <= table_top and block_top >= table_top - top_threshold:
-                candidates.append(block)
+        # 获取表格上方的所有文本
+        candidates = [block for block in text_blocks if block["y_bottom"] <= table_top]
 
         # 按 y_top 从上到下排序
         candidates.sort(key=lambda b: b["y_top"])
@@ -300,15 +294,44 @@ class PDFChapterExtractor:
                 rows[y_group] = []
             rows[y_group].append(block)
 
-        # 按行排序，每行内按 x_left 排序后拼接
+        # 按行排序，取最后5行
+        sorted_y_groups = sorted(rows.keys())
+        last_5_y_groups = sorted_y_groups[-5:] if len(sorted_y_groups) >= 5 else sorted_y_groups
+
         header_lines = []
-        for y_group in sorted(rows.keys()):
+        for y_group in last_5_y_groups:
             row_blocks = rows[y_group]
             row_blocks.sort(key=lambda b: b["bbox"][0])
             row_text = "".join(b["text"] for b in row_blocks)
             header_lines.append(row_text)
 
-        return "\n".join(header_lines).strip() if header_lines else "（未找到表头）"
+        # 当header_lines为空时，取上一页最下面的五行文本作为header_lines
+        if not header_lines and page_num > 1:
+            pre_text_blocks, _ = self.extract_page_elements(page_num - 1)
+
+            # 按行分组（y坐标相近的归为同一行）
+            rows: Dict[int, List[Dict]] = {}
+            y_tolerance = 5
+            for block in pre_text_blocks:
+                if not block["text"]:
+                    continue
+                y_group = round(block["y_top"] / y_tolerance)
+                if y_group not in rows:
+                    rows[y_group] = []
+                rows[y_group].append(block)
+
+            # 按行排序，取最后5行
+            sorted_y_groups = sorted(rows.keys())
+            last_5_y_groups = sorted_y_groups[-5:] if len(sorted_y_groups) >= 5 else sorted_y_groups
+
+            header_lines = []
+            for y_group in last_5_y_groups:
+                row_blocks = rows[y_group]
+                row_blocks.sort(key=lambda b: b["bbox"][0])
+                row_text = "".join(b["text"] for b in row_blocks)
+                header_lines.append(row_text)
+
+        return "\n".join(header_lines).strip() if header_lines else ""
 
     def should_merge_tables(self, table1: Dict, table2: Dict, 
                            page1_height: float, page2_height: float,
@@ -353,7 +376,7 @@ class PDFChapterExtractor:
             text_blocks, tables = self.extract_page_elements(page_num)
             for tab in tables:
                 header = self._get_page_top_text(
-                    text_blocks, tab, self.page_heights[page_num], top_ratio=0.1
+                    text_blocks, tab, page_num
                 )
                 raw_tables.append(TableWithHeader(
                     table_data=tab["table"].extract(),  # 二维列表
