@@ -414,26 +414,34 @@ class PDFChapterExtractor:
         
         if (len(merged_tables) == 1 and start_page == merged_tables[0].page_start_num - 1) or (len(merged_tables) > 1 and start_page == merged_tables[-2].page_start_num - 1):
             # 第一个表的表头在start_page页的底部
-            # 从start_page页提取文本块
-            text_blocks, _ = self.extract_page_elements(start_page)
-            
-            # 获取最后10个非空的行
-            bottom_text_blocks = []
-            len_i = 10
-            for i in range(len(text_blocks) - 1, -1, -1):
-                block = text_blocks[i]["text"]
-                if block != "":
-                    bottom_text_blocks.append(block)
-                    len_i -= 1
-                if len_i == 0:
-                    break
-            
-            # 按Y坐标排序，从下到上
-            bottom_text_blocks = bottom_text_blocks[::-1]
-            
-            # 组合表头文本
-            if bottom_text_blocks:
-                new_header_text = "\n".join(bottom_text_blocks)  # 使用最后3个文本块
+            # 使用 page.get_text() 获取文本，提取表格上面的五行作为 header_text
+            page = self.doc[start_page]
+            table_y_top = merged_tables[0].bbox[1]  # 表格的顶部 y 坐标
+
+            # 获取页面的文本块（包含位置信息）
+            page_dict = page.get_text("dict")
+            text_lines = []
+
+            for block in page_dict["blocks"]:
+                if block["type"] == 0:  # text block
+                    for line in block["lines"]:
+                        # 合并一行的所有 span 文本
+                        line_text = "".join(span["text"].strip() for span in line["spans"] if span["text"].strip())
+                        if line_text:
+                            # 使用行的 y_top（取第一个 span 的 y_top）
+                            y_top = line["spans"][0]["bbox"][1] if line["spans"] else 0
+                            text_lines.append({
+                                "text": line_text,
+                                "y_top": y_top
+                            })
+
+            # 提取表格上方的五行文本
+            above_lines = [line for line in text_lines if line["y_top"] < table_y_top]
+            # 取最后5行（最接近表格的5行）
+            top5_lines = above_lines[-5:] if len(above_lines) >= 5 else above_lines
+
+            if top5_lines:
+                new_header_text = "\n".join([line["text"] for line in top5_lines])
                 # 更新第一个表格的表头
                 merged_tables[0].header_text = new_header_text + merged_tables[0].header_text
 
@@ -473,10 +481,10 @@ class PDFChapterExtractor:
                         main_tables[section_title] = table
                         break
                 if not find_table:
-                    chapter_logger.info(f"未找到{section_title}")
+                    chapter_logger.error(f"未找到{section_title}")
             elif len(tables) < 1:
                 main_tables[section_title] = None
-                chapter_logger.info(f"未找到{section_title}表")
+                chapter_logger.error(f"未找到{section_title}")
             else:
                 main_tables[section_title] = tables[0]   
         return main_tables
