@@ -82,16 +82,9 @@ def main():
     """
     main_logger.info("开始处理 PDF 文件...")
     
-    # 获取 data/raw_pdfs 目录下的所有 PDF 文件
     pdf_dir = Path("data/000423")
-    if not pdf_dir.exists():
-        main_logger.error(f"目录 {pdf_dir} 不存在")
-        return
-    
     pdf_files = list(pdf_dir.glob("*.pdf"))
-    if not pdf_files:
-        main_logger.warning(f"在 {pdf_dir} 中未找到 PDF 文件")
-        return
+    # pdf_files = list(pdf_dir.glob("*2022*.pdf"))
     
     main_logger.info(f"找到 {len(pdf_files)} 个 PDF 文件")
     
