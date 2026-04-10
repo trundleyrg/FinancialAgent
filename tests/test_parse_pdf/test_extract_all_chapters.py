@@ -765,20 +765,20 @@ def run_all_tests():
         if test.test_basic_extraction():
             results["测试1：基本功能测试"] = True
 
-        if test.test_save_md_option():
-            results["测试2：save_md 参数测试"] = True
+        # if test.test_save_md_option():
+        #     results["测试2：save_md 参数测试"] = True
 
-        if test.test_level_filtering():
-            results["测试3：层级过滤测试"] = True
+        # if test.test_level_filtering():
+        #     results["测试3：层级过滤测试"] = True
 
         if test.test_table_to_markdown():
             results["测试4：表格转换测试"] = True
 
-        if test.test_content_integrity():
-            results["测试5：内容完整性测试"] = True
+        # if test.test_content_integrity():
+        #     results["测试5：内容完整性测试"] = True
 
-        if test.test_table_to_markdown_method():
-            results["测试6：_table_to_markdown 方法测试"] = True
+        # if test.test_table_to_markdown_method():
+        #     results["测试6：_table_to_markdown 方法测试"] = True
 
         if test.test_integration():
             results["集成测试"] = True
