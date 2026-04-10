@@ -85,7 +85,6 @@ def main():
     pdf_dir = Path("data/000423")
     pdf_files = list(pdf_dir.glob("*.pdf"))
     # pdf_files = list(pdf_dir.glob("*2022*.pdf"))
-    
     main_logger.info(f"找到 {len(pdf_files)} 个 PDF 文件")
     
     # 依次处理每个 PDF 文件
