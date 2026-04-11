@@ -201,7 +201,6 @@ cython_debug/
 
 # claude
 .claude/
-CLAUDE.md
 
 # Ruff stuff:
 .ruff_cache/

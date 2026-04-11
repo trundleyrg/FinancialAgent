@@ -49,7 +49,7 @@ import logging
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.output_parsers import JsonOutputParser
 
-from src.agents.state import FinancialState
+from src.graph.state import FinancialState
 from src.agents.tools.db_tools import get_all_financial_data
 from src.agents.tools.calculation_tools import (
     calculate_profitability,

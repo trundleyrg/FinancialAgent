@@ -6,12 +6,12 @@
 
 ### 1.1 StateGraph
 
-**文件**: `src/agents/state.py`
+**文件**: `src/graph/state.py`
 
 状态图的核心结构，定义了 Agent 处理过程中的所有状态信息。
 
 ```python
-from src.agents.state import FinancialState
+from src.graph.state import FinancialState
 ```
 
 **FinancialState 关键字段**:
@@ -28,7 +28,7 @@ from src.agents.state import FinancialState
 
 ### 1.2 StateGraph
 
-**文件**: `src/graph/graph.py`, `src/agents/graph.py`
+**文件**: `src/graph/graph.py`
 
 状态图的构建器，用于定义节点和边的流转逻辑。
 
@@ -58,7 +58,7 @@ from langgraph.graph import END
 
 ### 2.1 协调器节点 (Coordinator Nodes)
 
-**文件**: `src/agents/nodes.py`
+**文件**: `src/graph/coordinator_nodes.py`
 
 负责调用具体工具完成特定任务，不包含 LLM 调用。
 
@@ -84,7 +84,7 @@ from langgraph.graph import END
 
 ### 2.3 意图分类节点
 
-**文件**: `src/agents/graph.py`
+**文件**: `src/graph/graph.py`
 
 ```python
 intent_classification_node(state) -> FinancialState
@@ -152,7 +152,7 @@ intent_classification_node(state) -> FinancialState
 4. 两个分析都完成后，执行 `run_summary` 汇总结果
 5. `run_summary` 后进入 `END`，流程结束
 
-### 3.2 意图分类流程 (`src/agents/graph.py`)
+### 3.2 意图分类流程 (`src/graph/graph.py`)
 
 ```
 ┌──────────────────────────┐
@@ -199,7 +199,7 @@ def should_parse_pdf(state: FinancialState) -> Literal["parse_pdf", "run_analysi
 
 ### 4.2 `should_run_cyclical` / `should_run_dividend` / `should_run_fundamental`
 
-**文件**: `src/agents/graph.py`
+**文件**: `src/graph/graph.py`
 
 ```python
 def should_run_cyclical(state: FinancialState) -> bool:
@@ -287,8 +287,9 @@ return {"stock_types": ["cyclical"]}    # 追加到列表
 
 | 文件 | 职责 |
 |------|------|
-| `src/agents/state.py` | FinancialState 定义 |
+| `src/graph/state.py` | FinancialState 定义 |
+| `src/graph/stock_type_config.py` | 股票类型分类配置 |
+| `src/graph/coordinator_nodes.py` | 协调器节点实现 |
 | `src/graph/graph.py` | 主图构建 (`create_financial_agent_graph`) |
-| `src/agents/graph.py` | 分析图构建 (`build_financial_agent_graph`) |
-| `src/agents/nodes.py` | 协调器节点实现 |
+| `src/graph/propagation.py` | 状态传播器 |
 | `src/agents/analysis/*.py` | 分析 Agent 节点实现 |
