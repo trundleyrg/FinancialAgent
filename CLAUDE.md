@@ -24,11 +24,19 @@ python script/start_fastapi.py
 # 运行测试
 pytest tests/ -v
 
+# 调试模式测试（LangGraph 构建 + 东阿阿胶分析，输出到 data/000423/mmemory/）
+PYTHONIOENCODING=utf-8 python tests/test_graph_debug.py
+
 # 代码质量
 black src/
 ruff check src/
 mypy src/
 ```
+
+### 调试输出目录
+
+- `data/{stock_code}/memory/langgraph_trace.jsonl` - LangGraph 对话流程追踪记录
+- `data/{stock_code}/memory/分析报告_*.md` - 生成的 Markdown 分析报告
 
 ## 架构
 
@@ -40,6 +48,7 @@ mypy src/
    - `stock_type_config.py`: 股票类型分类关键词（cyclical/dividend/growth/value/defensive）
    - `coordinator_nodes.py`: 协调器节点（check_data_availability, parse_pdf, extract_financial_data, save_to_database）
    - `propagation.py`: `Propagator` 类用于状态初始化
+   - `result_persister.py`: 分析结果持久化 - 从 jsonl 提取结果并生成 Markdown 报告
 
 2. **Agents** (`src/agents/analysis/`) - 独立分析代理
    - `cyclical_stock_agent.py`: `create_cyclical_analysis(llm)` - 周期股分析

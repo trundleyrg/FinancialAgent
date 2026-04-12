@@ -9,6 +9,7 @@ Graph 模块
 - coordinator_nodes.py: 协调器节点实现
 - graph.py: 图构建和 FinancialAgentsGraph 类
 - propagation.py: 状态初始化和传播
+- result_persister.py: 分析结果持久化
 """
 from .graph import (
     create_financial_agent_graph,
@@ -34,6 +35,7 @@ from .coordinator_nodes import (
     get_coordinator_nodes,
 )
 from .propagation import Propagator, default_propagator
+from .result_persister import save_analysis_report
 
 __all__ = [
     # 图构建
@@ -60,4 +62,6 @@ __all__ = [
     # 状态传播
     "Propagator",
     "default_propagator",
+    # 结果持久化
+    "save_analysis_report",
 ]
