@@ -149,6 +149,39 @@ def get_all_financial_data(
     }
 
 
+def get_multi_year_financial_data(
+    company_name: str,
+    start_year: int,
+    end_year: int,
+    period: str = "FY"
+) -> Dict[str, Any]:
+    """
+    获取多年财务数据，用于同比增长率等跨期计算
+
+    Args:
+        company_name: 公司名称
+        start_year:   起始年份（含）
+        end_year:     结束年份（含）
+        period:       报告周期，默认年报 FY
+
+    Returns:
+        以年份字符串为键的嵌套字典，例如：
+        {
+            "2023": {"balance_sheet": {...}, "income_statement": {...}, "cash_flow": {...}},
+            "2024": {...}
+        }
+    """
+    result: Dict[str, Any] = {}
+    for year in range(start_year, end_year + 1):
+        data = get_all_financial_data(company_name, year, period)
+        # 仅在至少有一张非空报表时才写入
+        if any(data.values()):
+            result[str(year)] = data
+        else:
+            logger.warning(f"无数据: {company_name} {year} {period}")
+    return result
+
+
 def get_db_tools() -> List[callable]:
     """
     获取所有数据库工具
@@ -161,6 +194,7 @@ def get_db_tools() -> List[callable]:
         get_income_statement,
         get_cash_flow,
         get_all_financial_data,
+        get_multi_year_financial_data,
         check_company_data_availability
     ]
 

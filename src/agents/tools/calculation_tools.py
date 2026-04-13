@@ -40,22 +40,38 @@ def _get_value(data: Dict[str, Any], *keys, default: float = 0.0) -> float:
         return default
 
 
-def calculate_profitability(income_statement: Dict[str, Any]) -> Dict[str, float]:
+def calculate_profitability(
+    income_statement: Dict[str, Any],
+    balance_sheet: Optional[Dict[str, Any]] = None,
+) -> Dict[str, float]:
     """
     计算盈利能力指标
 
     Args:
         income_statement: 利润表数据
+        balance_sheet:    资产负债表数据（用于计算 ROE/ROA，可选）
 
     Returns:
         盈利能力指标字典
     """
     try:
         revenue = _get_value(income_statement, "operating_revenue")
+        # gross_profit 可能直接存储，也可能需要从 revenue - operating_costs 推算
         gross_profit = _get_value(income_statement, "gross_profit")
+        if gross_profit == 0.0:
+            operating_costs = _get_value(income_statement, "operating_costs") or _get_value(income_statement, "operating_cost")
+            gross_profit = revenue - operating_costs
+
         net_profit = _get_value(income_statement, "net_profit")
-        total_assets = _get_value(income_statement, "total_assets")  # 需要从资产负债表获取
-        equity = _get_value(income_statement, "equity")  # 需要从资产负债表获取
+
+        # ROE / ROA 数据优先从资产负债表获取
+        bs = balance_sheet or {}
+        total_assets = _get_value(bs, "total_assets") or _get_value(income_statement, "total_assets")
+        equity = (
+            _get_value(bs, "total_owners_equity")
+            or _get_value(bs, "total_equity")
+            or _get_value(income_statement, "equity")
+        )
 
         # 毛利率
         gross_margin = _safe_divide(gross_profit, revenue) * 100
@@ -63,17 +79,17 @@ def calculate_profitability(income_statement: Dict[str, Any]) -> Dict[str, float
         # 净利率
         net_margin = _safe_divide(net_profit, revenue) * 100
 
-        # ROE (净资产收益率) - 需要期初期末平均值，这里简化处理
+        # ROE（净资产收益率）
         roe = _safe_divide(net_profit, equity) * 100
 
-        # ROA (资产收益率) - 需要期初期末平均值，这里简化处理
+        # ROA（资产收益率）
         roa = _safe_divide(net_profit, total_assets) * 100
 
         return {
             "gross_margin": round(gross_margin, 2),
             "net_margin": round(net_margin, 2),
             "roe": round(roe, 2),
-            "roa": round(roa, 2)
+            "roa": round(roa, 2),
         }
     except Exception as e:
         logger.error(f"计算盈利能力指标失败: {e}")
@@ -81,7 +97,7 @@ def calculate_profitability(income_statement: Dict[str, Any]) -> Dict[str, float
             "gross_margin": 0.0,
             "net_margin": 0.0,
             "roe": 0.0,
-            "roa": 0.0
+            "roa": 0.0,
         }
 
 
@@ -150,8 +166,11 @@ def calculate_solvency(balance_sheet: Dict[str, Any], income_statement: Optional
         # 总资产
         total_assets = _get_value(balance_sheet, "total_assets")
 
-        # 股东权益
-        total_equity = _get_value(balance_sheet, "total_equity")
+        # 股东权益（DB 字段名为 total_owners_equity，兼容 total_equity）
+        total_equity = (
+            _get_value(balance_sheet, "total_owners_equity")
+            or _get_value(balance_sheet, "total_equity")
+        )
 
         # 资产负债率
         debt_to_asset = _safe_divide(total_liabilities, total_assets) * 100
@@ -159,11 +178,20 @@ def calculate_solvency(balance_sheet: Dict[str, Any], income_statement: Optional
         # 产权比率 (总负债 / 股东权益)
         debt_to_equity = _safe_divide(total_liabilities, total_equity)
 
-        # 利息保障倍数（需要财务费用和利润数据）
+        # 利息保障倍数
+        # EBIT 优先取报表字段，其次用 operating_profit，最后用 net_profit 近似
         interest_coverage = 0.0
         if income_statement:
-            ebit = _get_value(income_statement, "ebit")  # 息税前利润
-            interest_expense = _get_value(income_statement, "interest_expense")  # 利息支出
+            ebit = (
+                _get_value(income_statement, "ebit")
+                or _get_value(income_statement, "operating_profit")
+                or _get_value(income_statement, "net_profit")
+            )
+            # interest_expense 有时记在财务费用（financial_expenses）中
+            interest_expense = (
+                _get_value(income_statement, "interest_expense")
+                or _get_value(income_statement, "financial_expenses")
+            )
             if interest_expense and interest_expense > 0:
                 interest_coverage = _safe_divide(ebit, interest_expense)
 
@@ -253,14 +281,24 @@ def calculate_cyclical_metrics(
         # 营业收入
         revenue = _get_value(income_statement, "operating_revenue")
 
-        # 营业成本
-        operating_cost = _get_value(income_statement, "operating_cost")
+        # 营业成本（兼容 operating_costs 和 operating_cost 两种字段名）
+        operating_cost = (
+            _get_value(income_statement, "operating_costs")
+            or _get_value(income_statement, "operating_cost")
+        )
 
-        # 经营活动现金流净额
-        operating_cash_flow = _get_value(cash_flow, "operating_cash_flow")
+        # 经营活动现金流净额（DB 字段 net_cash_from_operations，兼容旧字段名）
+        operating_cash_flow = (
+            _get_value(cash_flow, "net_cash_from_operations")
+            or _get_value(cash_flow, "operating_cash_flow")
+        )
 
-        # 资本支出 (投资活动现金流净额 - 无形资产等)
-        capex = _get_value(cash_flow, "investing_cash_flow")
+        # 资本支出（购建固定资产支出）
+        capex = (
+            _get_value(cash_flow, "cash_for_fixed_assets")
+            or abs(_get_value(cash_flow, "net_cash_from_investing"))
+            or abs(_get_value(cash_flow, "investing_cash_flow"))
+        )
 
         # 产能利用率 (简化计算：营业收入 / 总资产)
         capacity_utilization = _safe_divide(revenue, total_assets) * 100
@@ -282,7 +320,7 @@ def calculate_cyclical_metrics(
             "inventory_turnover_days": round(inventory_turnover, 2),
             "fixed_asset_turnover": round(fixed_asset_turnover, 2),
             "cash_flow_health": round(cash_flow_health, 2),
-            "capex_intensity": "high" if abs(capex) > total_assets * 0.1 else "low"
+            "capex_intensity": "high" if capex > total_assets * 0.1 else ("medium" if capex > total_assets * 0.05 else "low")
         }
     except Exception as e:
         logger.error(f"计算周期股指标失败: {e}")

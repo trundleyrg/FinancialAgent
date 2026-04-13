@@ -55,14 +55,15 @@ from src.agents.tools.calculation_tools import (
     calculate_profitability,
     calculate_liquidity,
     calculate_solvency,
-    calculate_cyclical_metrics
+    calculate_cyclical_metrics,
 )
+from src.agents.tools.market_data_tool import get_stock_market_data
 
 logger = logging.getLogger("Agent.CyclicalStock")
 
 
 # 周期股分析 System Prompt
-SYSTEM_PROMPT = """你是一位专业的周期股分析师，专门分析钢铁、煤炭、化工、有色金属、航运、建筑等周期性行业的上市公司。
+SYSTEM_PROMPT = """你是一位专业的周期股分析师，专门从周期角度分析上市公司的财务状况和投资价值。
 
 你的职责是根据提供的财务数据，进行深入的周期股分析，包括：
 
@@ -166,18 +167,29 @@ def create_cyclical_analysis(llm) -> Callable:
             cash_flow = financial_data.get("cash_flow", {})
 
             # 2. 计算分析指标
-            profitability = calculate_profitability(income_statement)
+            profitability = calculate_profitability(income_statement, balance_sheet)
             liquidity = calculate_liquidity(balance_sheet)
             solvency = calculate_solvency(balance_sheet, income_statement)
             cyclical_metrics = calculate_cyclical_metrics(
                 balance_sheet, income_statement, cash_flow
             )
 
+            # 3. 获取市场估值数据（PE、PB、股价）
+            market_data = {}
+            if stock_code:
+                market_data = get_stock_market_data(stock_code)
+
             analysis_metrics = {
                 "profitability": profitability,
                 "liquidity": liquidity,
                 "solvency": solvency,
-                "cyclical_metrics": cyclical_metrics
+                "cyclical_metrics": cyclical_metrics,
+                "market_valuation": {
+                    "pe_ratio": market_data.get("pe_ratio", 0.0),
+                    "pb_ratio": market_data.get("pb_ratio", 0.0),
+                    "current_price": market_data.get("current_price", 0.0),
+                    "market_cap": market_data.get("market_cap", 0.0),
+                },
             }
 
             # 3. 构建 prompt

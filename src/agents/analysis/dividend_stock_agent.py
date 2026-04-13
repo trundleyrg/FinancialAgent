@@ -61,6 +61,7 @@ from src.agents.tools.calculation_tools import (
     calculate_liquidity,
     calculate_solvency
 )
+from src.agents.tools.market_data_tool import get_stock_market_data, get_dividend_stats
 
 logger = logging.getLogger("Agent.DividendStock")
 
@@ -179,19 +180,30 @@ def create_dividend_analysis(llm) -> Callable:
             cash_flow = financial_data.get("cash_flow", {})
 
             # 2. 计算分析指标
-            profitability = calculate_profitability(income_statement)
+            profitability = calculate_profitability(income_statement, balance_sheet)
             liquidity = calculate_liquidity(balance_sheet)
             solvency = calculate_solvency(balance_sheet, income_statement)
 
-            # 3. 提取分红相关数据（如果有的话）
-            # 注意：实际的dividend数据需要从数据库获取，此处做简化处理
+            # 3. 提取分红相关数据（现金流量表 + akshare 历史分红）
             dividend_info = _extract_dividend_info(financial_data)
+
+            # 4. 获取市场数据（股价、PE、PB、股息率）
+            market_data: Dict[str, Any] = {}
+            if stock_code:
+                market_data = get_stock_market_data(stock_code)
+                dividend_stats = get_dividend_stats(stock_code, years=5)
+                dividend_info["market_dividend_stats"] = dividend_stats
+                dividend_info["pe_ratio"] = market_data.get("pe_ratio", 0.0)
+                dividend_info["pb_ratio"] = market_data.get("pb_ratio", 0.0)
+                dividend_info["current_price"] = market_data.get("current_price", 0.0)
+                dividend_info["market_cap"] = market_data.get("market_cap", 0.0)
 
             analysis_metrics = {
                 "profitability": profitability,
                 "liquidity": liquidity,
                 "solvency": solvency,
-                "dividend_info": dividend_info
+                "dividend_info": dividend_info,
+                "market_data": market_data,
             }
 
             # 4. 构建 prompt
@@ -239,26 +251,37 @@ def _extract_dividend_info(financial_data: Dict[str, Any]) -> Dict[str, Any]:
     """
     从财务数据中提取分红相关信息
 
+    数据来源优先级：
+    1. 现金流量表 cash_for_dividend_and_interest（实际现金分红支出）
+    2. 计算自由现金流 = 经营活动现金流 - 购建固定资产现金支出
+
     Args:
-        financial_data: 财务数据字典
+        financial_data: 财务数据字典（含 balance_sheet / income_statement / cash_flow）
 
     Returns:
         分红信息字典
     """
     income_statement = financial_data.get("income_statement", {})
+    cash_flow = financial_data.get("cash_flow", {})
 
-    # 简化处理：从利润表提取相关数据
-    # 实际项目中可能需要从专门的dividend表或cash_flow表中获取
-    net_profit = income_statement.get("net_profit", 0)
-    operating_cash_flow = financial_data.get("cash_flow", {}).get("operating_cash_flow", 0)
+    net_profit = income_statement.get("net_profit", 0) or 0
+    operating_cash_flow = cash_flow.get("net_cash_from_operations", 0) or cash_flow.get("operating_cash_flow", 0) or 0
 
-    # 估算分红率（这里用应付股利变动等简化处理）
-    # 实际应该使用实际分红数据
-    estimated_dividend = income_statement.get("dividend_paid", 0)
+    # 实际现金分红支出（来自现金流量表"分配股利、利润或偿付利息支付的现金"）
+    cash_dividend_paid = cash_flow.get("cash_for_dividend_and_interest", 0) or 0
+
+    # 自由现金流 = 经营现金流 - 购建固定资产等资本支出
+    capex = cash_flow.get("cash_for_fixed_assets", 0) or 0
+    free_cash_flow = operating_cash_flow - capex
+
+    payout_ratio = (cash_dividend_paid / net_profit * 100) if net_profit > 0 else 0
+    fcf_coverage = (free_cash_flow / cash_dividend_paid) if cash_dividend_paid > 0 else 0
 
     return {
         "net_profit": net_profit,
         "operating_cash_flow": operating_cash_flow,
-        "estimated_dividend": estimated_dividend,
-        "estimated_payout_ratio": (estimated_dividend / net_profit * 100) if net_profit > 0 else 0
+        "free_cash_flow": free_cash_flow,
+        "cash_dividend_paid": cash_dividend_paid,   # 实际现金分红支出（元）
+        "payout_ratio": round(payout_ratio, 2),      # 分红率（%）
+        "fcf_coverage": round(fcf_coverage, 2),      # 自由现金流对分红覆盖倍数
     }

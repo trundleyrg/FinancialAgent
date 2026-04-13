@@ -60,13 +60,14 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import JsonOutputParser
 
 from src.graph.state import FinancialState
-from src.agents.tools.db_tools import get_all_financial_data
+from src.agents.tools.db_tools import get_all_financial_data, get_multi_year_financial_data
 from src.agents.tools.calculation_tools import (
     calculate_profitability,
     calculate_liquidity,
     calculate_solvency,
-    calculate_growth
+    calculate_growth,
 )
+from src.agents.tools.market_data_tool import get_stock_market_data
 
 logger = logging.getLogger("Agent.Fundamental")
 
@@ -191,16 +192,34 @@ def create_fundamental_analysis(llm) -> Callable:
             cash_flow = financial_data.get("cash_flow", {})
 
             # 2. 计算分析指标
-            profitability = calculate_profitability(income_statement)
+            profitability = calculate_profitability(income_statement, balance_sheet)
             liquidity = calculate_liquidity(balance_sheet)
             solvency = calculate_solvency(balance_sheet, income_statement)
-            growth = calculate_growth(financial_data)
+
+            # 获取上年数据用于同比增长率计算
+            previous_data = get_all_financial_data(
+                company_name=company_name,
+                year=report_year - 1,
+                period=report_period,
+            )
+            growth = calculate_growth(financial_data, previous_data if any(previous_data.values()) else None)
+
+            # 3. 获取市场估值数据（PE、PB、股价）
+            market_data = {}
+            if stock_code:
+                market_data = get_stock_market_data(stock_code)
 
             analysis_metrics = {
                 "profitability": profitability,
                 "liquidity": liquidity,
                 "solvency": solvency,
-                "growth": growth
+                "growth": growth,
+                "market_valuation": {
+                    "pe_ratio": market_data.get("pe_ratio", 0.0),
+                    "pb_ratio": market_data.get("pb_ratio", 0.0),
+                    "current_price": market_data.get("current_price", 0.0),
+                    "market_cap": market_data.get("market_cap", 0.0),
+                },
             }
 
             # 3. 构建 prompt
