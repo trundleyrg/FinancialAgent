@@ -23,7 +23,7 @@ def test_classify_pharmaceutical_as_defensive():
 
     assert "stock_types" in result
     assert isinstance(result["stock_types"], list)
-    assert len(result["stock_types"]) > 0
+    assert "defensive" in result["stock_types"]
     assert result["status"] == "processing"
 
 
@@ -57,7 +57,7 @@ def test_classify_with_empty_business_scope():
     assert result["status"] == "processing"
 
 
-def test_node_does_not_overwrite_existing_stock_types():
+def test_node_overwrites_existing_stock_types():
     """state 中已有 stock_types 时，节点应以分类结果覆盖（重新分类）"""
     from src.graph.coordinator_nodes import create_intent_classification_node
 

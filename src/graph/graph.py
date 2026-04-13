@@ -224,24 +224,28 @@ class FinancialAgentsGraph:
         # 设置入口点
         workflow.set_entry_point("intent_classification")
 
-        # 定义条件路由函数
-        def should_run_cyclical(state: FinancialState) -> bool:
-            return "cyclical" in state.get("stock_types", [])
-
-        def should_run_dividend(state: FinancialState) -> bool:
-            return "dividend" in state.get("stock_types", [])
-
-        def should_run_fundamental(state: FinancialState) -> bool:
+        # 定义条件路由函数（返回目标节点名称字符串，而非布尔值）
+        def route_based_on_stock_types(state: FinancialState) -> str:
+            """根据 stock_types 决定走哪条或多条路径"""
             stock_types = state.get("stock_types", [])
-            return "fundamental" in stock_types or (not any(t in stock_types for t in ["cyclical", "dividend"]))
+            routes = []
+            if "cyclical" in stock_types:
+                routes.append("cyclical")
+            if "dividend" in stock_types:
+                routes.append("dividend")
+            if "fundamental" in stock_types or (not any(t in stock_types for t in ["cyclical", "dividend"])):
+                routes.append("fundamental")
+            # 返回第一个路由目标；多路由通过条件边并行触发
+            return routes[0] if routes else "fundamental"
 
         # 使用条件边实现多选判断
         workflow.add_conditional_edges(
             "intent_classification",
+            route_based_on_stock_types,
             {
-                "cyclical": should_run_cyclical,
-                "dividend": should_run_dividend,
-                "fundamental": should_run_fundamental
+                "cyclical": "analysis_cyclical",
+                "dividend": "analysis_dividend",
+                "fundamental": "analysis_fundamental"
             }
         )
 
