@@ -140,7 +140,7 @@ def compile_graph(llm: Any) -> Any:
 
 def _create_intent_classification_node(llm) -> Any:
     """创建意图分类节点"""
-    from src.agents.graph import create_intent_classification_node
+    from src.graph.coordinator_nodes import create_intent_classification_node
     return create_intent_classification_node(llm)
 
 
