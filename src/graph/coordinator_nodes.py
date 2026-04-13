@@ -9,6 +9,7 @@ from typing import Callable, Dict, Any
 import logging
 
 from src.graph.state import FinancialState
+from src.graph.stock_type_config import classify_by_keywords
 from src.agents.tools.db_tools import check_company_data_availability
 from src.tools.chapter_extractor import PDFChapterExtractor
 from src.db.db_connector import get_db
@@ -274,6 +275,43 @@ def create_save_to_database_node() -> Callable:
             }
 
     return save_to_database_node
+
+
+def create_intent_classification_node(llm=None) -> Callable:
+    """
+    创建意图分类节点
+
+    根据 company_name 和 business_scope 对股票进行类型分类。
+    使用关键词规则匹配（classify_by_keywords），不调用 LLM。
+    llm 参数保留用于未来扩展。
+
+    Args:
+        llm: LLM 实例（当前未使用，保留接口兼容性）
+
+    Returns:
+        意图分类节点函数
+    """
+
+    def intent_classification_node(state: FinancialState) -> FinancialState:
+        company_name = state.get("company_name", "") or ""
+        business_scope = state.get("business_scope", "") or ""
+
+        text = f"{company_name} {business_scope}".strip()
+        stock_types = classify_by_keywords(text)
+
+        # 回退：若关键词未命中任何类型，默认归为 fundamental
+        if not stock_types:
+            stock_types = ["fundamental"]
+            logger.info(f"关键词未匹配到类型，回退为 fundamental: {company_name}")
+        else:
+            logger.info(f"意图分类完成: {company_name} → {stock_types}")
+
+        return {
+            "stock_types": stock_types,
+            "status": "processing",
+        }
+
+    return intent_classification_node
 
 
 def get_coordinator_nodes() -> Dict[str, Callable]:
