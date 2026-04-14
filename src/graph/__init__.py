@@ -17,7 +17,7 @@ from .graph import (
     should_parse_pdf,
 )
 from .state import FinancialState
-from src.agents.stock_tools.stock_type_config import (
+from src.stock_tools.stock_type_config import (
     STOCK_TYPES,
     STOCK_TYPE_KEYWORDS,
     classify_by_keywords,

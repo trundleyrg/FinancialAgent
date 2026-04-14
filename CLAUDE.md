@@ -45,7 +45,7 @@ mypy src/
 1. **Graph** (`src/graph/`) - LangGraph 编排和状态管理
    - `state.py`: `FinancialState` TypedDict - 定义代理状态，包括股票类型分类字段
    - `graph.py`: `create_financial_agent_graph()` 构建主工作流；`FinancialAgentsGraph` 类编排完整工作流
-   - `stock_type_config.py`: 股票类型分类关键词（位于 `src/agents/stock_tools/`）
+   - `stock_type_config.py`: 股票类型分类关键词（位于 `src/stock_tools/`）
    - `coordinator_nodes.py`: 协调器节点（check_data_availability, parse_pdf, extract_financial_data, save_to_database）
    - `propagation.py`: `Propagator` 类用于状态初始化
    - `result_persister.py`: 分析结果持久化 - 从 jsonl 提取结果并生成 Markdown 报告
@@ -88,7 +88,7 @@ mypy src/
 
 支持的类型（多选）: `cyclical`, `dividend`, `growth`, `value`, `defensive`, `fundamental`
 
-分类配置: `src/agents/stock_tools/stock_type_config.py` - 修改 `STOCK_TYPE_KEYWORDS` 可调整规则
+分类配置: `src/stock_tools/stock_type_config.py` - 修改 `STOCK_TYPE_KEYWORDS` 可调整规则
 
 ## 核心工作流
 

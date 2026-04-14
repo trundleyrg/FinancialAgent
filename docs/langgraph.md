@@ -288,7 +288,7 @@ return {"stock_types": ["cyclical"]}    # 追加到列表
 | 文件 | 职责 |
 |------|------|
 | `src/graph/state.py` | FinancialState 定义 |
-| `src/agents/stock_tools/stock_type_config.py` | 股票类型分类配置 |
+| `src/stock_tools/stock_type_config.py` | 股票类型分类配置 |
 | `src/graph/coordinator_nodes.py` | 协调器节点实现 |
 | `src/graph/graph.py` | 主图构建 (`create_financial_agent_graph`) |
 | `src/graph/propagation.py` | 状态传播器 |

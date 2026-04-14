@@ -4,10 +4,11 @@
 通过 akshare 获取 A 股实时行情、估值指标（PE/PB）和分红历史
 """
 from typing import Dict, Any, List, Optional
-import logging
 import datetime
 
-logger = logging.getLogger("Agent.MarketData")
+from src.utils.logger import manager
+
+logger = manager.get_logger("Agent.MarketData", "market_data.log")
 
 
 def _normalize_stock_code(stock_code: str) -> str:
