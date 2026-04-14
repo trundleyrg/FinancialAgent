@@ -5,7 +5,7 @@
 可根据实际需求修改或扩展关键词。
 
 使用方式：
-    from src.graph.stock_type_config import STOCK_TYPE_KEYWORDS, classify_by_keywords
+    from src.agents.stock_tools.stock_type_config import STOCK_TYPE_KEYWORDS, classify_by_keywords
 
 股票类型：
     - cyclical:    周期股（受经济周期影响大）

@@ -57,7 +57,7 @@ from src.agents.tools.calculation_tools import (
     calculate_solvency,
     calculate_cyclical_metrics,
 )
-from src.agents.tools.market_data_tool import get_stock_market_data
+from src.agents.stock_tools.market_data_tool import get_stock_market_data
 
 logger = logging.getLogger("Agent.CyclicalStock")
 

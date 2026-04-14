@@ -98,9 +98,6 @@ def get_stock_market_data(stock_code: str) -> Dict[str, Any]:
             f"市场数据获取成功: {code} {result['stock_name']}, "
             f"价格={result['current_price']}, PE={result['pe_ratio']}, PB={result['pb_ratio']}"
         )
-    except ImportError:
-        result["error"] = "akshare 未安装，无法获取市场数据"
-        logger.error(result["error"])
     except Exception as e:
         result["error"] = str(e)
         logger.error(f"获取股票市场数据失败 {code}: {e}")

@@ -61,7 +61,7 @@ from src.agents.tools.calculation_tools import (
     calculate_liquidity,
     calculate_solvency
 )
-from src.agents.tools.market_data_tool import get_stock_market_data, get_dividend_stats
+from src.agents.stock_tools.market_data_tool import get_stock_market_data, get_dividend_stats
 
 logger = logging.getLogger("Agent.DividendStock")
 

@@ -20,7 +20,7 @@ from .calculation_tools import (
     calculate_growth,
     calculate_cyclical_metrics,
 )
-from .market_data_tool import (
+from src.agents.stock_tools.market_data_tool import (
     get_market_data_tools,
     get_stock_market_data,
     get_stock_valuation_history,

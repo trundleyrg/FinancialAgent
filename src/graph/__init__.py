@@ -5,7 +5,6 @@ Graph 模块
 
 主要组件：
 - state.py: FinancialState 状态定义
-- stock_type_config.py: 股票类型分类配置
 - coordinator_nodes.py: 协调器节点实现
 - graph.py: 图构建和 FinancialAgentsGraph 类
 - propagation.py: 状态初始化和传播
@@ -18,7 +17,7 @@ from .graph import (
     should_parse_pdf,
 )
 from .state import FinancialState
-from .stock_type_config import (
+from src.agents.stock_tools.stock_type_config import (
     STOCK_TYPES,
     STOCK_TYPE_KEYWORDS,
     classify_by_keywords,
