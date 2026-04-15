@@ -49,6 +49,7 @@ def _ensure_market_prefix(stock_code: str) -> str:
         return "BJ" + code
     else:
         # 未知代码，默认深交所
+        logger.warning(f"未知股票代码 {code}，默认使用深交所")
         return "SZ" + code
 
 
@@ -92,9 +93,7 @@ def get_stock_basic_info(stock_code: str) -> Dict[str, Any]:
 
     try:
         # 标准化股票代码并添加市场前缀（xq API 需要前缀如 SZ000423）
-        code = _normalize_stock_code(stock_code)
-        if not code.startswith(("SZ", "SH", "BJ")):
-            code = "SZ" + code  # 默认深交所
+        code = _ensure_market_prefix(stock_code)
 
         stock_individual_basic_info_xq_df = ak.stock_individual_basic_info_xq(symbol=code)
         result = {
