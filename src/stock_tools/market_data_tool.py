@@ -23,6 +23,35 @@ def _normalize_stock_code(stock_code: str) -> str:
     return code.zfill(6)
 
 
+def _ensure_market_prefix(stock_code: str) -> str:
+    """
+    确保股票代码带有市场前缀
+
+    根据代码范围自动判断交易所并补充前缀：
+    - SZ (深圳): 000xxx, 001xxx, 002xxx, 003xxx, 200xxx
+    - SH (上海): 600xxx, 601xxx, 603xxx, 605xxx, 688xxx
+    - BJ (北京): 830xxx, 870xxx, 889xxx
+
+    Args:
+        stock_code: 6 位股票代码，如 "000423" 或 "SZ000423"
+
+    Returns:
+        带市场前缀的股票代码，如 "SZ000423"
+    """
+    code = _normalize_stock_code(stock_code)
+
+    # 已在外部做了标准化，此时 code 一定是 6 位纯数字
+    if code.startswith(("000", "001", "002", "003", "200")):
+        return "SZ" + code
+    elif code.startswith(("600", "601", "603", "605", "688")):
+        return "SH" + code
+    elif code.startswith(("830", "870", "889")):
+        return "BJ" + code
+    else:
+        # 未知代码，默认深交所
+        return "SZ" + code
+
+
 def get_stock_basic_info(stock_code: str) -> Dict[str, Any]:
     """
     获取股票基础信息（名称、行业、地区、上市日期等）
