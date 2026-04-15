@@ -21,6 +21,7 @@ load_dotenv(project_root / ".env")
 from src.utils.llm_client import AIClient
 from src.graph.graph import FinancialAgentsGraph
 from src.graph.propagation import Propagator
+from src.stock_tools.stock_type_config import classify_by_keywords
 from src.graph.result_persister import save_analysis_report
 
 import logging
