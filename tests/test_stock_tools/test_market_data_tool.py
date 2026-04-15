@@ -16,7 +16,26 @@ from src.stock_tools.market_data_tool import (
     get_dividend_history,
     get_dividend_stats,
     get_market_data_tools,
+    get_stock_basic_info
 )
+
+def test_stock_basic_info():
+    """测试获取股票基本信息（返回 xq.md 中标记为"是否返回"=1 的字段）"""
+    info = get_stock_basic_info("SZ000423")
+    # 检查 xq.md 中"是否返回"=1 的字段
+    assert "org_name_cn" in info
+    assert "org_short_name_cn" in info
+    assert "main_operation_business" in info
+    assert "operating_scope" in info
+    assert "org_cn_introduction" in info
+    assert "org_website" in info
+    assert "listed_date" in info
+    assert "provincial_name" in info
+    assert "classi_name" in info
+    assert "affiliate_industry" in info
+    assert info["org_short_name_cn"] == "东阿阿胶"
+    print(f"✓ get_stock_basic_info 测试通过: {info['org_short_name_cn']}")
+
 
 
 def test_get_market_data_tools():
@@ -91,6 +110,7 @@ if __name__ == "__main__":
     print("market_data_tool 测试")
     print("=" * 60)
 
+    test_stock_basic_info()
     test_get_market_data_tools()
     test_get_stock_market_data()
     test_get_stock_valuation_history()

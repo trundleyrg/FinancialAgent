@@ -3,6 +3,9 @@
 
 通过 akshare 获取 A 股实时行情、估值指标（PE/PB）和分红历史
 """
+import akshare as ak
+import traceback
+
 from typing import Dict, Any, List, Optional
 import datetime
 
@@ -18,6 +21,64 @@ def _normalize_stock_code(stock_code: str) -> str:
         if code.startswith(prefix):
             code = code[len(prefix):]
     return code.zfill(6)
+
+
+def get_stock_basic_info(stock_code: str) -> Dict[str, Any]:
+    """
+    获取股票基础信息（名称、行业、地区、上市日期等）
+
+    使用 akshare 获取股票基础信息，只返回 xq.md 中标记为"是否返回"=1 的字段。
+
+    Args:
+        stock_code: 6 位股票代码，如 "000423" 或 "SZ000423"
+
+    Returns:
+        {
+            "org_name_cn": str,              # 公司中文全称
+            "org_short_name_cn": str,        # 公司中文简称
+            "main_operation_business": str,  # 主营业务
+            "operating_scope": str,          # 经营范围
+            "org_cn_introduction": str,      # 公司简介
+            "org_website": str,              # 官网
+            "listed_date": str,              # 上市日期（时间戳）
+            "provincial_name": str,          # 所在省份
+            "classi_name": str,              # 分类名称
+            "affiliate_industry": dict,      # 所属行业 {"ind_code": str, "ind_name": str}
+            "error": str | None
+        }
+    """
+    # xq.md 中"是否返回"=1 的字段列表
+    RETURN_FIELDS = {
+        "org_name_cn",
+        "org_short_name_cn",
+        "main_operation_business",
+        "operating_scope",
+        "org_cn_introduction",
+        "org_website",
+        "listed_date",
+        "provincial_name",
+        "classi_name",
+        "affiliate_industry",
+    }
+
+    try:
+        # 标准化股票代码并添加市场前缀（xq API 需要前缀如 SZ000423）
+        code = _normalize_stock_code(stock_code)
+        if not code.startswith(("SZ", "SH", "BJ")):
+            code = "SZ" + code  # 默认深交所
+
+        stock_individual_basic_info_xq_df = ak.stock_individual_basic_info_xq(symbol=code)
+        result = {
+            row["item"]: row["value"]
+            for _, row in stock_individual_basic_info_xq_df.iterrows()
+            if row["item"] in RETURN_FIELDS
+        }
+        return result
+    except Exception:
+        logger.error(traceback.format_exc())
+        return {"error": traceback.format_exc()}
+
+
 
 
 def get_stock_market_data(stock_code: str) -> Dict[str, Any]:
@@ -65,19 +126,6 @@ def get_stock_market_data(stock_code: str) -> Dict[str, Any]:
         "error": None,
     }
     try:
-        import akshare as ak
-
-        df = ak.stock_zh_a_spot_em()
-        # 列名参考：代码, 名称, 最新价, 涨跌幅, 涨跌额, 成交量, 成交额, 振幅,
-        #           最高, 最低, 今开, 昨收, 量比, 换手率, 市盈率-动态, 市净率, 总市值, 流通市值, ...
-        row = df[df["代码"] == code]
-        if row.empty:
-            result["error"] = f"未找到股票代码 {code} 的行情数据"
-            logger.warning(result["error"])
-            return result
-
-        r = row.iloc[0]
-
         def _float(val, default=0.0) -> float:
             try:
                 v = float(val)
@@ -85,21 +133,64 @@ def get_stock_market_data(stock_code: str) -> Dict[str, Any]:
             except (TypeError, ValueError):
                 return default
 
-        result["stock_name"] = str(r.get("名称", ""))
-        result["current_price"] = _float(r.get("最新价"))
-        result["market_cap"] = _float(r.get("总市值"))
-        result["pe_ratio"] = _float(r.get("市盈率-动态"))
-        result["pb_ratio"] = _float(r.get("市净率"))
-        result["52w_high"] = _float(r.get("最高"))
-        result["52w_low"] = _float(r.get("最低"))
-        result["turnover_rate"] = _float(r.get("换手率"))
-        result["volume_ratio"] = _float(r.get("量比"))
+        # 1. 获取实时行情（一次性获取所有扩展数据：PE/PB/PS/PCF/市值等）
+        df_spot = ak.stock_zh_a_spot_em()
+        row_spot = df_spot[df_spot["代码"] == code]
+        if row_spot.empty:
+            result["error"] = f"未找到股票代码 {code} 的行情数据"
+            logger.warning(result["error"])
+            return result
+
+        rs = row_spot.iloc[0]
+        # 实时行情列名：代码, 名称, 最新价, 涨跌幅, 涨跌额, 成交量, 成交额, 振幅,
+        #                最高, 最低, 今开, 昨收, 量比, 换手率, 市盈率-动态, 市净率,
+        #                总市值, 流通市值, ... (可能还有市销率、市现率)
+        result["stock_name"] = str(rs.get("名称", ""))
+        result["current_price"] = _float(rs.get("最新价"))
+        result["market_cap"] = _float(rs.get("总市值"))
+        result["pe_ratio"] = _float(rs.get("市盈率-动态"))
+        result["pb_ratio"] = _float(rs.get("市净率"))
+        result["ps_ratio"] = _float(rs.get("市销率", 0))      # 可能不存在
+        result["pcf_ratio"] = _float(rs.get("市现率", 0))     # 可能不存在
+        result["52w_high"] = _float(rs.get("最高"))
+        result["52w_low"] = _float(rs.get("最低"))
+        result["turnover_rate"] = _float(rs.get("换手率"))
+        result["volume_ratio"] = _float(rs.get("量比"))
+        result["data_date"] = datetime.date.today().isoformat()
+
+        # 2. 从乐咕乐股获取 PE/PB（如果实时行情没有）
+        if result["pe_ratio"] == 0.0 or result["pb_ratio"] == 0.0:
+            try:
+                df_indicator = ak.stock_a_indicator_lg(symbol=code)
+                if df_indicator is not None and not df_indicator.empty:
+                    latest = df_indicator.iloc[-1]
+                    if result["pe_ratio"] == 0.0:
+                        result["pe_ratio"] = _float(latest.get("pe"))
+                    if result["pb_ratio"] == 0.0:
+                        result["pb_ratio"] = _float(latest.get("pb"))
+            except Exception:
+                pass
+
+        # 3. 如果实时行情缺少 52w_high/low，尝试从近一年历史数据计算
+        if result["52w_high"] == 0.0 or result["52w_low"] == 0.0:
+            df_year = ak.stock_zh_a_hist(
+                symbol=code,
+                period="daily",
+                start_date=(datetime.date.today() - datetime.timedelta(days=365)).strftime("%Y%m%d"),
+                end_date=datetime.date.today().strftime("%Y%m%d"),
+                adjust="qfq"
+            )
+            if df_year is not None and not df_year.empty:
+                result["52w_high"] = _float(df_year["最高"].max())
+                result["52w_low"] = _float(df_year["最低"].min())
 
         logger.info(
             f"市场数据获取成功: {code} {result['stock_name']}, "
             f"价格={result['current_price']}, PE={result['pe_ratio']}, PB={result['pb_ratio']}"
         )
     except Exception as e:
+        import traceback
+        print(traceback.format_exc())
         result["error"] = str(e)
         logger.error(f"获取股票市场数据失败 {code}: {e}")
 
@@ -165,9 +256,6 @@ def get_stock_valuation_history(
         logger.info(f"估值历史获取成功: {code}, 共 {len(records)} 条")
         return records
 
-    except ImportError:
-        logger.error("akshare 未安装")
-        return []
     except Exception as e:
         logger.error(f"获取估值历史失败 {code}: {e}")
         return []
