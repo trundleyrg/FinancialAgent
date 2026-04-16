@@ -29,6 +29,9 @@ POSTGRES_URL = os.getenv("POSTGRES_DB_URL", "postgresql://postgres:postgres@loca
 API_HOST = os.getenv("API_HOST", "127.0.0.1")
 API_PORT = int(os.getenv("API_PORT", "8000"))
 
+# CORS配置
+ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000")
+
 # 文件大小限制 (50MB)
 MAX_FILE_SIZE = 50 * 1024 * 1024
 

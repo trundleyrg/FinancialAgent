@@ -7,6 +7,9 @@ import pandas as pd
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
+from contextlib import contextmanager
+from concurrent.futures import ThreadPoolExecutor
+import threading
 
 import sys
 sys.path.append(str(Path(__file__).resolve().parent.parent.parent.parent))
@@ -15,6 +18,9 @@ from src.tools.chapter_extractor import PDFChapterExtractor
 from src.db.db_connector import get_db, save_tables_to_db
 from src.db.table_models import TableWithHeader
 from src.utils.logger import ui_logger
+
+# 全局线程池用于PDF处理
+_pdf_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="pdf_worker")
 
 
 @dataclass
@@ -30,18 +36,27 @@ class TableData:
 
 
 class PDFService:
-    """PDF处理服务"""
+    """PDF处理服务（支持异步和资源清理）"""
+
+    # 类级别的临时目录集合（用于清理）
+    _temp_dirs: List[Path] = []
+    _temp_dirs_lock = threading.Lock()
 
     def __init__(self, db_type: str = "duckdb"):
         self.db_type = db_type
-        self.temp_dir = None
+        self.temp_dir: Optional[Path] = None
 
     def _create_temp_dir(self) -> Path:
-        """创建临时目录"""
+        """创建临时目录并记录"""
         temp_base_dir = Path("./data/temp").resolve()
         temp_base_dir.mkdir(parents=True, exist_ok=True)
         temp_dir = temp_base_dir / f"pdf_service_{uuid.uuid4().hex[:8]}"
         temp_dir.mkdir(parents=True, exist_ok=True)
+
+        # 记录临时目录用于后续清理
+        with PDFService._temp_dirs_lock:
+            PDFService._temp_dirs.append(temp_dir)
+
         return temp_dir
 
     def _table_to_dataframe(self, table_data: List[List[str]]) -> pd.DataFrame:
@@ -225,3 +240,35 @@ class PDFService:
         except Exception as e:
             ui_logger.error(f"获取表格数据失败: {e}")
             return None
+
+    @classmethod
+    def cleanup_temp_dirs(cls, max_age_hours: int = 24):
+        """
+        清理临时目录（删除超过指定时间的目录）
+
+        Args:
+            max_age_hours: 临时目录最大保留时间（小时）
+        """
+        import time
+        current_time = time.time()
+        max_age_seconds = max_age_hours * 3600
+
+        with cls._temp_dirs_lock:
+            dirs_to_remove = []
+
+            for temp_dir in cls._temp_dirs:
+                if temp_dir.exists():
+                    # 检查目录年龄
+                    dir_age = current_time - temp_dir.stat().st_mtime
+                    if dir_age > max_age_seconds:
+                        dirs_to_remove.append(temp_dir)
+
+            # 清理过期目录
+            for temp_dir in dirs_to_remove:
+                try:
+                    import shutil
+                    shutil.rmtree(temp_dir)
+                    cls._temp_dirs.remove(temp_dir)
+                    ui_logger.info(f"已清理过期临时目录: {temp_dir}")
+                except Exception as e:
+                    ui_logger.error(f"清理临时目录失败 {temp_dir}: {e}")

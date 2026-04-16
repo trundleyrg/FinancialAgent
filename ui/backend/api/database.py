@@ -1,8 +1,9 @@
 """
 数据库查询API路由
 """
-from typing import List, Optional
-from fastapi import APIRouter, Query, HTTPException
+from typing import List, Optional, Annotated
+from fastapi import APIRouter, Query, HTTPException, Depends
+from functools import lru_cache
 
 from ui.backend.models.schemas import (
     QueryOptions, CompanyOption, YearOption, PeriodOption,
@@ -13,17 +14,24 @@ from ui.backend.services.db_service import DatabaseService
 router = APIRouter(prefix="/database", tags=["数据库查询"])
 
 
+def get_db_service(
+    db_type: Annotated[str, Query(description="数据库类型")] = "duckdb"
+) -> DatabaseService:
+    """数据库服务依赖注入（单例模式）"""
+    return DatabaseService(db_type=db_type)
+
+
 @router.get("/options", response_model=QueryOptions)
 async def get_query_options(
-    db_type: str = Query("duckdb", description="数据库类型")
+    service: Annotated[DatabaseService, Depends(get_db_service)]
 ):
     """
     获取查询选项（公司列表、年份列表）
-    """
-    service = DatabaseService(db_type=db_type)
 
-    companies = service.get_all_companies()
-    years = service.get_all_years()
+    优化：使用缓存避免重复查询数据库
+    """
+    companies = service.get_all_companies(use_cache=True)
+    years = service.get_all_years(use_cache=True)
 
     return QueryOptions(
         companies=[CompanyOption(**c) for c in companies],
@@ -33,9 +41,9 @@ async def get_query_options(
 
 @router.get("/periods", response_model=List[PeriodOption])
 async def get_periods(
-    stock_code: str = Query(..., description="股票代码"),
-    year: int = Query(..., description="报告年份"),
-    db_type: str = Query("duckdb", description="数据库类型")
+    stock_code: Annotated[str, Query(description="股票代码")],
+    year: Annotated[int, Query(description="报告年份")],
+    service: Annotated[DatabaseService, Depends(get_db_service)]
 ):
     """
     获取指定公司和年份的可用报告周期
@@ -43,7 +51,6 @@ async def get_periods(
     if not stock_code or not year:
         raise HTTPException(status_code=400, detail="股票代码和年份不能为空")
 
-    service = DatabaseService(db_type=db_type)
     periods = service.get_available_periods(stock_code, year)
 
     if not periods:
@@ -54,15 +61,14 @@ async def get_periods(
 
 @router.get("/report", response_model=Optional[FinancialReport])
 async def get_report(
-    stock_code: str = Query(..., description="股票代码"),
-    year: int = Query(..., description="报告年份"),
-    period: str = Query(..., description="报告周期"),
-    db_type: str = Query("duckdb", description="数据库类型")
+    stock_code: Annotated[str, Query(description="股票代码")],
+    year: Annotated[int, Query(description="报告年份")],
+    period: Annotated[str, Query(description="报告周期")],
+    service: Annotated[DatabaseService, Depends(get_db_service)]
 ):
     """
     获取财务报告基本信息
     """
-    service = DatabaseService(db_type=db_type)
     report = service.get_report(stock_code, year, period)
 
     if not report:
@@ -73,15 +79,14 @@ async def get_report(
 
 @router.get("/data", response_model=QueryResult)
 async def get_financial_data(
-    stock_code: str = Query(..., description="股票代码"),
-    year: int = Query(..., description="报告年份"),
-    period: str = Query(..., description="报告周期"),
-    db_type: str = Query("duckdb", description="数据库类型")
+    stock_code: Annotated[str, Query(description="股票代码")],
+    year: Annotated[int, Query(description="报告年份")],
+    period: Annotated[str, Query(description="报告周期")],
+    service: Annotated[DatabaseService, Depends(get_db_service)]
 ):
     """
     获取完整财务数据（报告信息 + 三大报表）
     """
-    service = DatabaseService(db_type=db_type)
     result = service.get_financial_data(stock_code, year, period)
 
     if not result.get("report"):
@@ -92,23 +97,36 @@ async def get_financial_data(
 
 @router.get("/companies", response_model=List[CompanyOption])
 async def get_companies(
-    db_type: str = Query("duckdb", description="数据库类型")
+    service: Annotated[DatabaseService, Depends(get_db_service)]
 ):
     """
     获取所有公司列表
+
+    优化：使用缓存
     """
-    service = DatabaseService(db_type=db_type)
-    companies = service.get_all_companies()
+    companies = service.get_all_companies(use_cache=True)
     return [CompanyOption(**c) for c in companies]
 
 
 @router.get("/years", response_model=List[YearOption])
 async def get_years(
-    db_type: str = Query("duckdb", description="数据库类型")
+    service: Annotated[DatabaseService, Depends(get_db_service)]
 ):
     """
     获取所有年份列表
+
+    优化：复用公司缓存数据，减少数据库查询
     """
-    service = DatabaseService(db_type=db_type)
-    years = service.get_all_years()
+    years = service.get_all_years(use_cache=True)
     return [YearOption(**y) for y in years]
+
+
+@router.post("/cache/invalidate")
+async def invalidate_cache():
+    """
+    手动清除数据库查询缓存
+
+    在数据更新后调用此接口以刷新缓存
+    """
+    DatabaseService.invalidate_cache()
+    return {"message": "缓存已清除"}
