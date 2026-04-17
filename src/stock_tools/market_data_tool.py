@@ -3,11 +3,13 @@
 
 通过 akshare 获取 A 股实时行情、估值指标（PE/PB）和分红历史
 """
-import akshare as ak
-import traceback
 
-from typing import Dict, Any, List, Optional
 import datetime
+import traceback
+from typing import Any, Dict, List, Optional
+
+import akshare as ak
+import pandas as pd
 
 from src.utils.logger import manager
 
@@ -19,7 +21,7 @@ def _normalize_stock_code(stock_code: str) -> str:
     code = stock_code.strip().upper()
     for prefix in ("SH", "SZ", "BJ", "SH.", "SZ.", "BJ."):
         if code.startswith(prefix):
-            code = code[len(prefix):]
+            code = code[len(prefix) :]
     return code.zfill(6)
 
 
@@ -77,7 +79,6 @@ def get_stock_basic_info(stock_code: str) -> Dict[str, Any]:
             "error": str | None
         }
     """
-    # xq.md 中"是否返回"=1 的字段列表
     RETURN_FIELDS = {
         "org_name_cn",
         "org_short_name_cn",
@@ -92,6 +93,7 @@ def get_stock_basic_info(stock_code: str) -> Dict[str, Any]:
     }
 
     try:
+        # 从雪球获取股票基础信息
         # 标准化股票代码并添加市场前缀（xq API 需要前缀如 SZ000423）
         code = _ensure_market_prefix(stock_code)
 
@@ -107,120 +109,76 @@ def get_stock_basic_info(stock_code: str) -> Dict[str, Any]:
         return {"error": traceback.format_exc()}
 
 
-
-
-def get_stock_market_data(stock_code: str) -> Dict[str, Any]:
+def get_stock_financial_indicator(
+    stock_code: str,
+    start_year: Optional[str] = None,
+) -> Dict[str, Any]:
     """
-    获取股票实时市场数据（价格、市值、PE、PB）
+    获取股票主要财务指标
 
-    使用东方财富实时行情接口，覆盖沪深京三市所有 A 股。
+    使用 akshare 的 stock_financial_analysis_indicator 接口，
+    数据来源：新浪财经-财务分析-财务指标
 
     Args:
-        stock_code: 股票代码，如 "000423" 或 "SH600519"
+        stock_code: 6 位股票代码，如 "000423" 或 "600004"
+        start_year: 开始查询的年份，默认近 5 年
 
     Returns:
         {
             "stock_code": str,
-            "stock_name": str,
-            "current_price": float,       # 当前股价（元）
-            "market_cap": float,          # 总市值（元）
-            "pe_ratio": float,            # 动态市盈率
-            "pb_ratio": float,            # 市净率
-            "ps_ratio": float,            # 市销率
-            "pcf_ratio": float,           # 市现率
-            "52w_high": float,            # 52 周最高价
-            "52w_low": float,             # 52 周最低价
-            "turnover_rate": float,       # 换手率（%）
-            "volume_ratio": float,        # 量比
-            "data_date": str,             # 数据日期
-            "error": str | None           # 错误信息
+            "start_year": str,
+            "data": List[Dict],  # 每行数据，key 为字段名，value 为值
+            "fields": List[str],  # 所有字段名列表
+            "count": int,         # 数据行数
+            "error": str | None
         }
     """
     code = _normalize_stock_code(stock_code)
+    if start_year is None:
+        start_year = str(datetime.date.today().year - 5)
+
     result: Dict[str, Any] = {
         "stock_code": code,
-        "stock_name": "",
-        "current_price": 0.0,
-        "market_cap": 0.0,
-        "pe_ratio": 0.0,
-        "pb_ratio": 0.0,
-        "ps_ratio": 0.0,
-        "pcf_ratio": 0.0,
-        "52w_high": 0.0,
-        "52w_low": 0.0,
-        "turnover_rate": 0.0,
-        "volume_ratio": 0.0,
-        "data_date": datetime.date.today().isoformat(),
+        "start_year": start_year,
+        "data": [],
+        "fields": [],
+        "count": 0,
         "error": None,
     }
-    try:
-        def _float(val, default=0.0) -> float:
-            try:
-                v = float(val)
-                return v if v == v else default  # NaN check
-            except (TypeError, ValueError):
-                return default
 
-        # 1. 获取实时行情（一次性获取所有扩展数据：PE/PB/PS/PCF/市值等）
-        df_spot = ak.stock_zh_a_spot_em()
-        row_spot = df_spot[df_spot["代码"] == code]
-        if row_spot.empty:
-            result["error"] = f"未找到股票代码 {code} 的行情数据"
-            logger.warning(result["error"])
+    try:
+        df = ak.stock_financial_analysis_indicator(symbol=code, start_year=start_year)
+        if df is None or df.empty:
+            logger.warning(f"财务指标数据为空: {code}")
             return result
 
-        rs = row_spot.iloc[0]
-        # 实时行情列名：代码, 名称, 最新价, 涨跌幅, 涨跌额, 成交量, 成交额, 振幅,
-        #                最高, 最低, 今开, 昨收, 量比, 换手率, 市盈率-动态, 市净率,
-        #                总市值, 流通市值, ... (可能还有市销率、市现率)
-        result["stock_name"] = str(rs.get("名称", ""))
-        result["current_price"] = _float(rs.get("最新价"))
-        result["market_cap"] = _float(rs.get("总市值"))
-        result["pe_ratio"] = _float(rs.get("市盈率-动态"))
-        result["pb_ratio"] = _float(rs.get("市净率"))
-        result["ps_ratio"] = _float(rs.get("市销率", 0))      # 可能不存在
-        result["pcf_ratio"] = _float(rs.get("市现率", 0))     # 可能不存在
-        result["52w_high"] = _float(rs.get("最高"))
-        result["52w_low"] = _float(rs.get("最低"))
-        result["turnover_rate"] = _float(rs.get("换手率"))
-        result["volume_ratio"] = _float(rs.get("量比"))
-        result["data_date"] = datetime.date.today().isoformat()
+        # 字段名列表
+        result["fields"] = list(df.columns)
 
-        # 2. 从乐咕乐股获取 PE/PB（如果实时行情没有）
-        if result["pe_ratio"] == 0.0 or result["pb_ratio"] == 0.0:
-            try:
-                df_indicator = ak.stock_a_indicator_lg(symbol=code)
-                if df_indicator is not None and not df_indicator.empty:
-                    latest = df_indicator.iloc[-1]
-                    if result["pe_ratio"] == 0.0:
-                        result["pe_ratio"] = _float(latest.get("pe"))
-                    if result["pb_ratio"] == 0.0:
-                        result["pb_ratio"] = _float(latest.get("pb"))
-            except Exception:
-                pass
+        # 数据行
+        for _, row in df.iterrows():
+            record = {}
+            for col in df.columns:
+                val = row[col]
+                # 转换 numpy/pandas 类型为 Python 原生类型
+                if hasattr(val, "item"):
+                    val = val.item()
+                elif hasattr(val, "to_pydatetime"):
+                    val = str(val.to_pydatetime()) if not pd.isna(val) else None
+                record[col] = (
+                    None if (val is None or (isinstance(val, float) and val != val)) else val
+                )
+            result["data"].append(record)
 
-        # 3. 如果实时行情缺少 52w_high/low，尝试从近一年历史数据计算
-        if result["52w_high"] == 0.0 or result["52w_low"] == 0.0:
-            df_year = ak.stock_zh_a_hist(
-                symbol=code,
-                period="daily",
-                start_date=(datetime.date.today() - datetime.timedelta(days=365)).strftime("%Y%m%d"),
-                end_date=datetime.date.today().strftime("%Y%m%d"),
-                adjust="qfq"
-            )
-            if df_year is not None and not df_year.empty:
-                result["52w_high"] = _float(df_year["最高"].max())
-                result["52w_low"] = _float(df_year["最低"].min())
-
+        result["count"] = len(result["data"])
         logger.info(
-            f"市场数据获取成功: {code} {result['stock_name']}, "
-            f"价格={result['current_price']}, PE={result['pe_ratio']}, PB={result['pb_ratio']}"
+            f"财务指标获取成功: {code}, {result['count']} 条, {len(result['fields'])} 个字段"
         )
+
     except Exception as e:
-        import traceback
-        print(traceback.format_exc())
         result["error"] = str(e)
-        logger.error(f"获取股票市场数据失败 {code}: {e}")
+        logger.error(f"获取财务指标失败 {code}: {e}")
+        logger.error(traceback.format_exc())
 
     return result
 
@@ -231,6 +189,7 @@ def get_stock_valuation_history(
     end_date: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """
+    存在问题，需要修改
     获取股票历史估值数据（每日 PE/PB）
 
     数据来源：乐咕乐股（涵盖近 10 年日频 PE/PB）
@@ -265,6 +224,7 @@ def get_stock_valuation_history(
 
         records = []
         for _, row in df.iterrows():
+
             def _f(v):
                 try:
                     fv = float(v)
@@ -277,8 +237,8 @@ def get_stock_valuation_history(
                 "pe": _f(row.get("pe")),
                 "pb": _f(row.get("pb")),
                 "ps": _f(row.get("ps", 0)),
-                "dv_ratio": _f(row.get("dv_ratio", 0)),   # 股息率（%）
-                "total_mv": _f(row.get("total_mv", 0)),    # 总市值（万元）
+                "dv_ratio": _f(row.get("dv_ratio", 0)),  # 股息率（%）
+                "total_mv": _f(row.get("total_mv", 0)),  # 总市值（万元）
             })
 
         logger.info(f"估值历史获取成功: {code}, 共 {len(records)} 条")
@@ -308,13 +268,14 @@ def get_dividend_history(stock_code: str) -> List[Dict[str, Any]]:
     try:
         import akshare as ak
 
-        df = ak.stock_history_dividend_detail(code=code, indicator="分红")
+        df = ak.stock_history_dividend_detail(symbol=code, indicator={"分红", "配股"})
         if df is None or df.empty:
             logger.warning(f"无分红历史数据: {code}")
             return []
 
         records = []
         for _, row in df.iterrows():
+
             def _s(v):
                 return str(v).strip() if v is not None else ""
 
@@ -335,83 +296,15 @@ def get_dividend_history(stock_code: str) -> List[Dict[str, Any]]:
         records.sort(key=lambda x: x["report_date"], reverse=True)
         logger.info(f"分红历史获取成功: {code}, 共 {len(records)} 条")
         return records
-
-    except ImportError:
-        logger.error("akshare 未安装")
-        return []
     except Exception as e:
         logger.error(f"获取分红历史失败 {code}: {e}")
         return []
 
 
-def get_dividend_stats(stock_code: str, years: int = 5) -> Dict[str, Any]:
-    """
-    统计近 N 年的分红情况
-
-    Args:
-        stock_code: 股票代码
-        years:      统计年数，默认 5 年
-
-    Returns:
-        {
-            "total_dividends":        int,    # 分红总次数
-            "consecutive_years":      int,    # 连续分红年数
-            "avg_cash_per_share":     float,  # 近 N 年平均每股分红（元）
-            "max_cash_per_share":     float,  # 最高每股分红（元）
-            "dividend_years":         list,   # 有分红记录的年份列表
-            "latest_cash_per_share":  float,  # 最近一次每股分红（元）
-        }
-    """
-    history = get_dividend_history(stock_code)
-    cutoff_year = datetime.date.today().year - years
-
-    recent = []
-    for item in history:
-        date_str = item.get("report_date", "") or item.get("dividend_date", "")
-        try:
-            year = int(date_str[:4])
-            if year >= cutoff_year:
-                recent.append({**item, "year": year})
-        except (ValueError, IndexError):
-            continue
-
-    if not recent:
-        return {
-            "total_dividends": 0,
-            "consecutive_years": 0,
-            "avg_cash_per_share": 0.0,
-            "max_cash_per_share": 0.0,
-            "dividend_years": [],
-            "latest_cash_per_share": 0.0,
-        }
-
-    dividend_years = sorted(set(r["year"] for r in recent))
-    cash_values = [r["cash_per_share"] for r in recent if r["cash_per_share"] > 0]
-
-    # 连续分红年数（从最近一年往前数）
-    consecutive = 0
-    current_year = datetime.date.today().year
-    for y in range(current_year, current_year - years - 1, -1):
-        if y in dividend_years:
-            consecutive += 1
-        else:
-            break
-
-    return {
-        "total_dividends": len(recent),
-        "consecutive_years": consecutive,
-        "avg_cash_per_share": round(sum(cash_values) / len(cash_values), 4) if cash_values else 0.0,
-        "max_cash_per_share": max(cash_values) if cash_values else 0.0,
-        "dividend_years": dividend_years,
-        "latest_cash_per_share": recent[0]["cash_per_share"] if recent else 0.0,
-    }
-
-
 def get_market_data_tools():
     """返回所有市场数据工具函数列表"""
     return [
-        get_stock_market_data,
         get_stock_valuation_history,
         get_dividend_history,
-        get_dividend_stats,
+        get_stock_financial_indicator,
     ]

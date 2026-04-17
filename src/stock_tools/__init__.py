@@ -7,10 +7,9 @@ Stock Tools 模块
 """
 from .market_data_tool import (
     get_market_data_tools,
-    get_stock_market_data,
     get_stock_valuation_history,
     get_dividend_history,
-    get_dividend_stats,
+    get_stock_financial_indicator,
 )
 from .stock_type_config import (
     STOCK_TYPES,
@@ -25,10 +24,9 @@ from .stock_type_config import (
 __all__ = [
     # Market data
     "get_market_data_tools",
-    "get_stock_market_data",
     "get_stock_valuation_history",
     "get_dividend_history",
-    "get_dividend_stats",
+    "get_stock_financial_indicator",
     # Stock type config
     "STOCK_TYPES",
     "STOCK_TYPE_KEYWORDS",
