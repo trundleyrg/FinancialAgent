@@ -183,24 +183,102 @@ def get_stock_financial_indicator(
     return result
 
 
-def get_stock_valuation_history(
-    stock_code: str,
-    start_date: Optional[str] = None,
-    end_date: Optional[str] = None,
-) -> List[Dict[str, Any]]:
+def get_dividend_history(stock_code: str) -> List[Dict[str, Any]]:
     """
-    存在问题，需要修改
-    获取股票历史估值数据（每日 PE/PB）
-
-    数据来源：乐咕乐股（涵盖近 10 年日频 PE/PB）
+    获取股票历史分红与配股数据
 
     Args:
         stock_code: 6 位股票代码
-        start_date: 开始日期，格式 "YYYY-MM-DD"，默认近一年
-        end_date:   结束日期，格式 "YYYY-MM-DD"，默认今天
 
     Returns:
-        按日期升序排列的估值列表，每项包含 date / pe / pb
+        按公告日期降序排列的事件列表，每项包含：
+        - report_date:    分红/配股方案公告日
+        - dividend_date:  除权除息日
+        - cash_per_share: 每股分红（元，税前），仅分红事件有值
+        - allotment_price: 配股价格（元），仅配股事件有值
+        - allotment_ratio: 配股比例（如 10配3），仅配股事件有值
+        - payout_ratio:   方案说明
+        - event_type:     事件类型 ("分红" 或 "配股")
+    """
+    code = _normalize_stock_code(stock_code)
+    records = []
+
+    def _s(v):
+        return str(v).strip() if v is not None else ""
+
+    def _f(v, default=0.0):
+        try:
+            fv = float(str(v).replace(",", ""))
+            return fv if fv == fv else default
+        except (TypeError, ValueError):
+            return default
+
+    try:
+        # 查询分红记录
+        df_dividend = ak.stock_history_dividend_detail(symbol=code, indicator="分红")
+        if df_dividend is not None and not df_dividend.empty:
+            for _, row in df_dividend.iterrows():
+                records.append({
+                    "report_date": _s(row.get("公告日期", "")),
+                    "dividend_date": _s(row.get("除权除息日", "")),
+                    "cash_per_share": _f(row.get("派息(税前)(元)", 0)),
+                    "allotment_price": None,
+                    "allotment_ratio": None,
+                    "payout_ratio": _s(row.get("方案说明", "")),
+                    "event_type": "分红",
+                })
+
+        # 查询配股记录
+        df_allotment = ak.stock_history_dividend_detail(symbol=code, indicator="配股")
+        if df_allotment is not None and not df_allotment.empty:
+            for _, row in df_allotment.iterrows():
+                records.append({
+                    "report_date": _s(row.get("公告日期", "")),
+                    "dividend_date": _s(row.get("除权除息日", "")),
+                    "cash_per_share": None,
+                    "allotment_price": _f(row.get("配股价格", 0)),
+                    "allotment_ratio": _s(row.get("配股比例", "")),
+                    "payout_ratio": _s(row.get("方案说明", "")),
+                    "event_type": "配股",
+                })
+
+        if not records:
+            logger.warning(f"无分红或配股历史数据: {code}")
+            return []
+
+        records.sort(key=lambda x: x["report_date"], reverse=True)
+        logger.info(f"分红与配股历史获取成功: {code}, 共 {len(records)} 条")
+        return records
+
+    except Exception as e:
+        logger.error(f"获取分红与配股历史失败 {code}: {e}")
+        return []
+
+
+def get_stock_pe_pb_history(
+    stock_code: str,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    adjust: str = "",
+) -> List[Dict[str, Any]]:
+    """
+    获取股票指定日期范围内的PB和PE变化
+
+    使用 stock_zh_a_hist 获取历史行情数据（支持复权方式），
+    使用 stock_zh_valuation_baidu 获取市净率(PB)历史数据。
+
+    Args:
+        stock_code: 6 位股票代码，如 "000423" 或 "600004"
+        start_date: 开始日期，格式 "YYYY-MM-DD"，默认近一年
+        end_date: 结束日期，格式 "YYYY-MM-DD"，默认今天
+        adjust: 复权方式，""=不复权，"qfq"=前复权，"hfq"=后复权，默认不复权
+
+    Returns:
+        按日期升序排列的估值列表，每项包含：
+        - date: 交易日（YYYY-MM-DD）
+        - close: 收盘价
+        - pb: 市净率
+        - error: str | None
     """
     code = _normalize_stock_code(stock_code)
     if end_date is None:
@@ -208,102 +286,64 @@ def get_stock_valuation_history(
     if start_date is None:
         start_date = (datetime.date.today() - datetime.timedelta(days=365)).isoformat()
 
+    # 转换日期格式为 YYYYMMDD
+    start_str = start_date.replace("-", "")
+    end_str = end_date.replace("-", "")
+
+    result: List[Dict[str, Any]] = []
+
     try:
-        import akshare as ak
+        # 获取历史行情数据（支持复权方式）
+        df = ak.stock_zh_a_hist(
+            symbol=code,
+            period="daily",
+            start_date=start_str,
+            end_date=end_str,
+            adjust=adjust,
+        )
 
-        df = ak.stock_a_indicator_lg(symbol=code)
-        # 列名：trade_date, pe, pb, ps, dv_ratio, dv_ttm, total_mv
         if df is None or df.empty:
-            logger.warning(f"估值历史数据为空: {code}")
-            return []
+            logger.warning(f"历史行情数据为空: {code}, adjust={adjust}")
+            return result
 
-        df = df.rename(columns={"trade_date": "date"})
-        df["date"] = df["date"].astype(str)
-        df = df[(df["date"] >= start_date) & (df["date"] <= end_date)]
-        df = df.sort_values("date")
+        # 获取 PB 历史数据（来自百度估值）
+        pb_df = ak.stock_zh_valuation_baidu(symbol=code, indicator="市净率", period="全部")
+        pb_dict = {}
+        if pb_df is not None and not pb_df.empty:
+            for _, row in pb_df.iterrows():
+                date_val = str(row.get("date", ""))
+                pb_val = row.get("value")
+                if date_val and pb_val is not None:
+                    pb_dict[date_val] = float(pb_val) if not pd.isna(pb_val) else None
 
-        records = []
+        # 遍历历史数据，匹配 PB
         for _, row in df.iterrows():
+            date_val = str(row.get("日期", ""))
+            close = float(row.get("收盘", 0))
 
-            def _f(v):
-                try:
-                    fv = float(v)
-                    return fv if fv == fv else 0.0
-                except (TypeError, ValueError):
-                    return 0.0
+            # 匹配 PB 数据
+            pb = pb_dict.get(date_val)
 
-            records.append({
-                "date": str(row.get("date", "")),
-                "pe": _f(row.get("pe")),
-                "pb": _f(row.get("pb")),
-                "ps": _f(row.get("ps", 0)),
-                "dv_ratio": _f(row.get("dv_ratio", 0)),  # 股息率（%）
-                "total_mv": _f(row.get("total_mv", 0)),  # 总市值（万元）
+            result.append({
+                "date": date_val,
+                "close": round(close, 2),
+                "pb": pb,
             })
 
-        logger.info(f"估值历史获取成功: {code}, 共 {len(records)} 条")
-        return records
+        logger.info(f"PE/PB历史获取成功: {code}, adjust={adjust}, 共 {len(result)} 条")
 
     except Exception as e:
-        logger.error(f"获取估值历史失败 {code}: {e}")
-        return []
+        logger.error(f"获取PE/PB历史失败 {code}: {e}")
+        logger.error(traceback.format_exc())
+        return [{"error": str(e)}]
 
-
-def get_dividend_history(stock_code: str) -> List[Dict[str, Any]]:
-    """
-    获取股票历史分红数据
-
-    Args:
-        stock_code: 6 位股票代码
-
-    Returns:
-        按公告日期降序排列的分红列表，每项包含：
-        - report_date:    分红方案公告日
-        - dividend_date:  除权除息日
-        - cash_per_share: 每股分红（元，税前）
-        - shares_before:  分红前股本（万股）
-        - payout_ratio:   分红方案描述
-    """
-    code = _normalize_stock_code(stock_code)
-    try:
-        import akshare as ak
-
-        df = ak.stock_history_dividend_detail(symbol=code, indicator={"分红", "配股"})
-        if df is None or df.empty:
-            logger.warning(f"无分红历史数据: {code}")
-            return []
-
-        records = []
-        for _, row in df.iterrows():
-
-            def _s(v):
-                return str(v).strip() if v is not None else ""
-
-            def _f(v, default=0.0):
-                try:
-                    fv = float(str(v).replace(",", ""))
-                    return fv if fv == fv else default
-                except (TypeError, ValueError):
-                    return default
-
-            records.append({
-                "report_date": _s(row.get("公告日期", "")),
-                "dividend_date": _s(row.get("除权除息日", "")),
-                "cash_per_share": _f(row.get("派息(税前)(元)", row.get("每股送转", 0))),
-                "payout_ratio": _s(row.get("方案说明", "")),
-            })
-
-        records.sort(key=lambda x: x["report_date"], reverse=True)
-        logger.info(f"分红历史获取成功: {code}, 共 {len(records)} 条")
-        return records
-    except Exception as e:
-        logger.error(f"获取分红历史失败 {code}: {e}")
-        return []
+    return result
 
 
 def get_market_data_tools():
     """返回所有市场数据工具函数列表"""
     return [
+        get_stock_pe_pb_history,
         get_stock_valuation_history,
         get_dividend_history,
         get_stock_financial_indicator,

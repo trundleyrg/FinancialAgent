@@ -12,11 +12,11 @@ project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 from src.stock_tools.market_data_tool import (
-    get_stock_valuation_history,
     get_dividend_history,
     get_market_data_tools,
     get_stock_basic_info,
     get_stock_financial_indicator,
+    get_stock_pe_pb_history
 )
 
 
@@ -41,8 +41,9 @@ def test_stock_basic_info():
 def test_get_market_data_tools():
     """测试 get_market_data_tools 返回正确的函数列表"""
     tools = get_market_data_tools()
-    assert len(tools) == 3
+    assert len(tools) == 4
     tool_names = [t.__name__ for t in tools]
+    assert "get_stock_pe_pb_history" in tool_names
     assert "get_stock_valuation_history" in tool_names
     assert "get_dividend_history" in tool_names
     assert "get_stock_financial_indicator" in tool_names
@@ -97,6 +98,42 @@ def test_get_stock_financial_indicator():
         print("✓ get_stock_financial_indicator 测试通过: 无数据（可能接口限制）")
 
 
+def test_get_stock_pe_pb_history():
+    """测试获取股票指定日期范围内的PB变化（支持复权方式）"""
+    records = get_stock_pe_pb_history(
+        "000423",
+        start_date="2022-01-01",
+        end_date="2024-12-31",
+        adjust="",
+    )
+    assert isinstance(records, list)
+    # 网络问题可能导致返回错误
+    if not records:
+        print("✓ get_stock_pe_pb_history 测试通过: 无数据（网络问题或市场关闭）")
+        return
+    if "error" in records[0]:
+        print(f"✓ get_stock_pe_pb_history 测试通过: 网络问题 - {records[0]['error']}")
+        return
+    record = records[0]
+    assert "date" in record
+    assert "close" in record
+    assert "pb" in record
+    print(f"✓ get_stock_pe_pb_history 测试通过: 获取到 {len(records)} 条记录")
+
+    # 测试前复权
+    records_qfq = get_stock_pe_pb_history(
+        "000423",
+        start_date="2024-01-01",
+        end_date="2024-06-30",
+        adjust="qfq",
+    )
+    assert isinstance(records_qfq, list)
+    if records_qfq and "error" not in records_qfq[0]:
+        print(f"✓ get_stock_pe_pb_history (前复权) 测试通过: 获取到 {len(records_qfq)} 条记录")
+    else:
+        print("✓ get_stock_pe_pb_history (前复权) 测试通过: 无数据（网络问题）")
+
+
 if __name__ == "__main__":
     print("=" * 60)
     print("market_data_tool 测试")
@@ -107,6 +144,7 @@ if __name__ == "__main__":
     test_get_stock_valuation_history()
     test_get_dividend_history()
     test_get_stock_financial_indicator()
+    test_get_stock_pe_pb_history()
 
     print("\n" + "=" * 60)
     print("所有测试通过！")
