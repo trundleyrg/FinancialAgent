@@ -10,6 +10,7 @@ from .market_data_tool import (
     get_dividend_history,
     get_market_data_tools,
     get_stock_financial_indicator,
+    get_stock_pe_pb_history,
 )
 from .stock_type_config import (
     CLASSIFICATION_RULES,
@@ -24,7 +25,7 @@ from .stock_type_config import (
 __all__ = [
     # Market data
     "get_market_data_tools",
-    "get_stock_valuation_history",
+    "get_stock_pe_pb_history",
     "get_dividend_history",
     "get_stock_financial_indicator",
     # Stock type config

@@ -344,7 +344,6 @@ def get_market_data_tools():
     """返回所有市场数据工具函数列表"""
     return [
         get_stock_pe_pb_history,
-        get_stock_valuation_history,
         get_dividend_history,
         get_stock_financial_indicator,
     ]

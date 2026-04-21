@@ -41,28 +41,12 @@ def test_stock_basic_info():
 def test_get_market_data_tools():
     """测试 get_market_data_tools 返回正确的函数列表"""
     tools = get_market_data_tools()
-    assert len(tools) == 4
+    assert len(tools) == 3
     tool_names = [t.__name__ for t in tools]
     assert "get_stock_pe_pb_history" in tool_names
-    assert "get_stock_valuation_history" in tool_names
     assert "get_dividend_history" in tool_names
     assert "get_stock_financial_indicator" in tool_names
     print("✓ get_market_data_tools 测试通过")
-
-
-def test_get_stock_valuation_history():
-    """测试获取股票历史估值数据（近5年）"""
-    records = get_stock_valuation_history("000423")
-    # 允许为空数据（节假日等因素），但返回应该是列表
-    assert isinstance(records, list)
-    if records:
-        record = records[0]
-        assert "date" in record
-        assert "pe" in record
-        assert "pb" in record
-        print(f"✓ get_stock_valuation_history 测试通过: 获取到 {len(records)} 条记录")
-    else:
-        print("✓ get_stock_valuation_history 测试通过: 无历史数据（可能市场关闭）")
 
 
 def test_get_dividend_history():
@@ -141,7 +125,6 @@ if __name__ == "__main__":
 
     test_stock_basic_info()
     test_get_market_data_tools()
-    test_get_stock_valuation_history()
     test_get_dividend_history()
     test_get_stock_financial_indicator()
     test_get_stock_pe_pb_history()
