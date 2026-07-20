@@ -4,7 +4,7 @@
 
 ## 技术架构
 
-- **Python 3.12+**: 主要开发语言
+- **Python 3.12.13**: 主要开发语言
 - **LangGraph / LangChain**: Agent 图形化编排框架
 - **LangChain OpenAI**: AI 模型接口（支持 OpenAI、DeepSeek 等）
 - **Peewee ORM**: 数据库 ORM 框架
