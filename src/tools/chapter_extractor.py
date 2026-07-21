@@ -207,27 +207,43 @@ class PDFChapterExtractor:
         """
         提取单页的文本块和表格（过滤页眉、页脚和表格区域内的文本）
         :return: (文本块列表, 表格列表)
+
+        注意：PyMuPDF 的 find_tables 在同一 doc 实例上连续调用多页时，会出现
+        状态污染（将上一页/下页的内容混入当前页表格）。为规避此问题，表格提取
+        使用独立打开的 doc 实例；文本提取仍使用 self.doc 以保证效率。
         """
         page = self.doc[page_num]
         page_height = page.rect.height
         blocks = page.get_text("dict")["blocks"]
-        
-        # 先提取表格，获取表格边界框列表（用于过滤文本块）
-        table_bboxes = []
-        tables = []
+
+        # 先提取表格（独立 doc 避免 PyMuPDF 状态污染）
+        table_bboxes: List[Tuple[float, float, float, float]] = []
+        tables: List[Dict] = []
         try:
-            # strategy=1: 只检测有线条边框的表格
-            tabs = page.find_tables(strategy="lines_strict")
-            for tab in tabs:
-                if tab.header and tab.cells:  # 有效表格
-                    table_bboxes.append(tab.bbox)
-                    tables.append({
-                        "table": tab,
-                        "bbox": tab.bbox,  # (x0, y0, x1, y1)
-                        "y_top": tab.bbox[1],
-                        "y_bottom": tab.bbox[3],
-                        "col_count": len(tab.header.cells) if tab.header else 0
-                    })
+            tmp_doc = fitz.open(self.doc.name)
+            try:
+                tmp_page = tmp_doc[page_num]
+                # strategy=1: 只检测有线条边框的表格
+                tabs = tmp_page.find_tables(strategy="lines_strict")
+                for tab in tabs:
+                    if tab.header and tab.cells:  # 有效表格
+                        table_bboxes.append(tab.bbox)
+                        # 将表格数据立即物化为二维列表，避免后续引用跨 doc 表格对象
+                        try:
+                            tab_data = tab.extract()
+                        except Exception as ex:
+                            chapter_logger.warning(f"页面 {page_num} 表格 extract 失败: {ex}")
+                            continue
+                        tables.append({
+                            "table": None,  # 已物化，无需保留原 Table 对象
+                            "table_data": tab_data,
+                            "bbox": tab.bbox,
+                            "y_top": tab.bbox[1],
+                            "y_bottom": tab.bbox[3],
+                            "col_count": len(tab.header.cells) if tab.header else 0,
+                        })
+            finally:
+                tmp_doc.close()
         except Exception as e:
             chapter_logger.warning(f"页面 {page_num} 表格提取失败: {e}")
         
@@ -377,12 +393,62 @@ class PDFChapterExtractor:
         
         return True
 
-    def merge_table_data(self, main_table: List[List[str]], 
+    def merge_table_data(self, main_table: List[List[str]],
                         continuation_table: List[List[str]]) -> List[List[str]]:
         """
         合并跨页表格数据（跳过续表的表头行）
         """
         return main_table + continuation_table
+
+    @staticmethod
+    def _header_indicates_other_statement(
+        next_header: str, current_header: str = ""
+    ) -> bool:
+        """判断 next_header 是否提示这是另一张报表的起点（不同于 current_header 所属报表）。
+
+        用于跨页合并时避免把后续报表的起点表格错误地拼接到当前报表尾部。
+        """
+        if not next_header:
+            return False
+
+        # 主要报表标题前缀（带 TOC 编号）
+        prefixes = [
+            ("1、合并资产负债表",),
+            ("2、母公司资产负债表",),
+            ("3、合并利润表",),
+            ("4、母公司利润表",),
+            ("5、合并现金流量表",),
+            ("6、母公司现金流量表",),
+        ]
+
+        # 先找 next 属于哪一张报表（按前缀）
+        next_stmt = None
+        for grp in prefixes:
+            for kw in grp:
+                if kw in next_header:
+                    next_stmt = grp[0]
+                    break
+            if next_stmt:
+                break
+
+        if next_stmt is None:
+            return False  # 没识别出报表标题，可能只是页眉，继续按物理位置合并判断
+
+        # 找 current 属于哪一张报表
+        current_stmt = None
+        for grp in prefixes:
+            for kw in grp:
+                if kw in current_header:
+                    current_stmt = grp[0]
+                    break
+            if current_stmt:
+                break
+
+        # 如果 current 未识别出报表标题，退化为：只要 next 标识为新报表起点就拒绝合并
+        if current_stmt is None:
+            return True
+
+        return next_stmt != current_stmt
 
     def extract_tables_in_section(self, start_page: int, end_page: int) -> List[TableWithHeader]:
         """
@@ -397,13 +463,13 @@ class PDFChapterExtractor:
                     text_blocks, tab, page_num
                 )
                 raw_tables.append(TableWithHeader(
-                    table_data=tab["table"].extract(),  # 二维列表
+                    table_data=tab.get("table_data", []),  # 已物化的二维列表
                     header_text=header,
                     page_start_num=page_num,
                     page_end_num=page_num,
                     bbox=tab["bbox"]
                 ))
-        
+
         # 步骤2: 合并跨页表格
         merged_tables = []
         i = 0
@@ -415,6 +481,12 @@ class PDFChapterExtractor:
                 next_tab = raw_tables[j]
                 # 必须是连续页面
                 if next_tab.page_start_num != current.page_start_num + (j - i):
+                    break
+                # 检查表头：若 next_tab 的表头包含其它报表的标题，说明是另一张报表的起点，
+                # 则不合并，避免把后续报表混入当前报表
+                if self._header_indicates_other_statement(
+                    next_tab.header_text, current.header_text
+                ):
                     break
                 # 检查合并条件
                 page1_h = self.page_heights[current.page_start_num + (j - i - 1)]
@@ -712,7 +784,7 @@ class PDFChapterExtractor:
                         continue
                     if page_max_y is not None and tab_y >= page_max_y:
                         continue
-                    table_data = tab["table"].extract()
+                    table_data = tab.get("table_data", [])
                     table_md = extractor._table_to_markdown(table_data)
                     all_elements.append((tab["y_top"], tab["bbox"][0], "table", table_md, page_num))
             
