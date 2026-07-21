@@ -46,7 +46,7 @@ from typing import Callable, Dict, Any
 import json
 import logging
 
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import JsonOutputParser
 
 from src.graph.state import FinancialState

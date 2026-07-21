@@ -13,7 +13,6 @@ from typing import Any, Dict, List, Optional, Union
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage, AIMessage
-from langchain_core.outputs import ChatGeneration, ChatResult
 
 # 加载 .env 文件（项目根目录）
 _env_path = Path(__file__).parent.parent.parent / ".env"
@@ -57,7 +56,7 @@ class AIClient:
             "temperature": self.temperature,
             "max_tokens": self.max_tokens if self.max_tokens > 0 else None,
             "max_retries": self.max_retries,
-            "request_timeout": self.timeout,
+            "timeout": self.timeout,
         }
 
         # 添加 API Key（如果有）
@@ -105,13 +104,10 @@ class AIClient:
 
         # 调用 LangChain LLM
         try:
-            response: ChatResult = self.llm.invoke(langchain_messages, **call_params)
+            response = self.llm.invoke(langchain_messages, **call_params)
 
-            # 提取响应内容
-            if isinstance(response, ChatResult):
-                content = response.generations[0].message.content
-            else:
-                content = response.content if hasattr(response, 'content') else str(response)
+            # 提取响应内容（langchain 1.x 的 ChatOpenAI.invoke() 返回 AIMessage）
+            content = response.content if hasattr(response, 'content') else str(response)
 
             return content or ""
         except TimeoutError as e:
