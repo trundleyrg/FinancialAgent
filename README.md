@@ -29,9 +29,13 @@ FinancialAgent/
 │   ├── db/
 │   │   ├── __init__.py
 │   │   ├── db_connector.py   # 数据库操作逻辑 (Peewee ORM)
-│   │   ├── init_postgresql_db.py     # PostgreSQL 数据库初始化脚本
 │   │   ├── models.py         # Pydantic 数据验证模型
 │   │   └── table_models.py   # Peewee 数据库表模型
+│   ├── script/
+│   │   ├── init_duckdb.py     # DuckDB 数据库初始化脚本
+│   │   ├── init_postgresql_db.py  # PostgreSQL 数据库初始化脚本
+│   │   ├── extract_financial_statements.py  # 离线提取财报到 Excel
+│   │   └── start_fastapi.py   # 启动 FastAPI 服务
 │   ├── utils/
 │   │   ├── __init__.py
 │   │   ├── logger.py         # 日志管理

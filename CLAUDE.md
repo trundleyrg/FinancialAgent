@@ -77,6 +77,43 @@ mypy src/
 - DuckDB 文件: `data/db/financial_data.duckdb`
 - PostgreSQL: 通过 `.env` 中的 `POSTGRES_DB_URL` 配置
 
+### 数据库初始化
+
+| 脚本 | 用途 |
+|------|------|
+| `script/init_duckdb.py` | DuckDB 数据库初始化（推荐默认数据库） |
+| `script/init_postgresql_db.py` | PostgreSQL 数据库初始化 |
+
+DuckDB 用法：
+
+```bash
+# 默认路径初始化（./data/db/financial_data.duckdb）
+python script/init_duckdb.py
+
+# 指定路径 / 重置 / 检查 / 列出现有表 / 查看 ORM 模型
+python script/init_duckdb.py --path ./data/db/financial_data.duckdb
+python script/init_duckdb.py --reset
+python script/init_duckdb.py --check
+python script/init_duckdb.py --list
+python script/init_duckdb.py --models
+```
+
+PostgreSQL 用法：
+
+```bash
+# 默认（自动读 .env 的 POSTGRES_DB_URL）
+python script/init_postgresql_db.py
+
+# 显式指定连接参数
+python script/init_postgresql_db.py --host localhost --port 5432 --user postgres --password postgres --dbname financial
+
+# 仅测试连接 / drop 重建
+python script/init_postgresql_db.py --check-only
+python script/init_postgresql_db.py --reset
+```
+
+两个脚本均通过 [src/db/db_connector.py](src/db/db_connector.py) 共用底层建表逻辑。
+
 ### 入口点
 
 | 入口点 | 用途 |
@@ -84,6 +121,9 @@ mypy src/
 | `main.py` | CLI - 处理 `data/000423/` 中的 PDF |
 | `ui/backend/main.py` | FastAPI Web 服务器 |
 | `script/start_fastapi.py` | 备选 FastAPI 启动方式 |
+| `script/init_duckdb.py` | DuckDB 数据库初始化 |
+| `script/init_postgresql_db.py` | PostgreSQL 数据库初始化 |
+| `script/extract_financial_statements.py` | 离线提取财报到 Excel |
 | `src/tools/download_cninfo_reports.py` | 从 CNInfo 下载年报（支持代码或名称查询） |
 
 ## 股票类型分类
