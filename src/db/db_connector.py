@@ -656,16 +656,75 @@ TABLE_TYPE_NAMES = {
 }
 
 
-def _parse_table_data_to_model_data(table_data: List[List[str]], model_class: Type[Model]) -> Dict[str, Any]:
+def parse_chinese_unit_to_factor(unit_str: str) -> float:
+    """
+    将报表中提取的单位字符串转换为到「人民币元」的换算系数。
+
+    支持的单位：
+    - 元      → 1
+    - 千元    → 1,000
+    - 千元/千元 → 1,000
+    - 万元    → 10,000
+    - 百万元  → 1,000,000
+    - 亿元    → 100,000,000
+
+    项目：当前只考虑人民币元计价的国内企业报表，不做汇率换算。
+    """
+    if not unit_str:
+        return 1.0
+
+    u = str(unit_str).strip().replace(' ', '').replace('人民币', '')
+
+    # 按长度从长到短匹配，避免 "百万元" 优先于 "千元"
+    # 亿元 / 亿元
+    if '亿元' in u or u == '亿':
+        return 100_000_000.0
+    # 百万元
+    if '百万元' in u:
+        return 1_000_000.0
+    # 万元 / 万
+    if '万元' in u or u == '万':
+        return 10_000.0
+    # 千元
+    if '千元' in u:
+        return 1_000.0
+    # 元（兜底）
+    return 1.0
+
+
+def _is_per_share_field(model_class: Type[Model], field_name: str) -> bool:
+    """判断字段是否为「每股」类指标（元/股），不需要按金额单位换算。"""
+    if not field_name:
+        return False
+    field = model_class._meta.fields.get(field_name)
+    if not field:
+        return False
+    help_text = getattr(field, 'help_text', '') or ''
+    return '每股' in help_text
+
+
+def _parse_table_data_to_model_data(
+    table_data: List[List[str]],
+    model_class: Type[Model],
+    unit_str: str = "",
+) -> Dict[str, Any]:
     """
     将表格数据解析为模型数据字典
     表格数据格式：第一行通常是表头，后续行是数据
     支持两种常见的财务报表格式：
     1. 两列格式：项目名 | 金额
     2. 多列格式：项目名 | 本期金额 | 上期金额
+
+    单位处理（关键）：
+    - 根据 unit_str（来自 PDF 报表抬头「单位：xxx」）计算换算系数
+    - 所有金额字段统一转换为「人民币元」后存储
+    - 每股收益等「每股」类字段（help_text 含"每股"）不参与金额换算
+    - 项目：仅考虑人民币元计价的国内企业报表
     """
     if not table_data or len(table_data) < 2:
         return {}
+
+    unit_factor = parse_chinese_unit_to_factor(unit_str)
 
     model_data = {}
     fields = model_class._meta.fields
@@ -714,19 +773,34 @@ def _parse_table_data_to_model_data(table_data: List[List[str]], model_class: Ty
         if field_name and value_str:
             try:
                 # 处理常见的数值格式
-                # 移除逗号、空格和单位
-                value_str_clean = value_str.replace(',', '').replace(' ', '').replace('元', '').replace('万元', '').replace('亿元', '')
+                # 移除逗号、空格和单位字符
+                value_str_clean = (
+                    value_str.replace(',', '')
+                    .replace(' ', '')
+                    .replace('元', '')
+                    .replace('万元', '')
+                    .replace('亿元', '')
+                    .replace('百万元', '')
+                    .replace('千元', '')
+                )
                 # 处理括号表示的负数 (123) -> -123
                 if '(' in value_str_clean and ')' in value_str_clean:
                     value_str_clean = '-' + value_str_clean.replace('(', '').replace(')', '')
+
                 # 处理百分比
                 if '%' in value_str_clean:
                     value_str_clean = value_str_clean.replace('%', '')
                     value = float(value_str_clean)
-                elif value_str_clean == '-':
+                elif value_str_clean in ('-', '－', ''):
                     value = 0
                 else:
                     value = float(value_str_clean)
+
+                # 单位换算：金额字段按 unit_factor 放大到「人民币元」
+                # 「每股」类字段（基本/稀释每股收益）保持原值，单位 元/股
+                if not _is_per_share_field(model_class, field_name):
+                    value = value * unit_factor
+
                 model_data[field_name] = value
             except (ValueError, TypeError):
                 # 如果无法解析为数字，跳过
@@ -952,7 +1026,13 @@ def save_tables_to_db(main_tables: Dict[str, Any], company_name: str, pdf_path:s
 
         try:
             # 解析表格数据为模型数据
-            model_data = _parse_table_data_to_model_data(table_obj.table_data, model_class)
+            # 传入 table_obj.unit（来自 PDF 报表抬头的"单位：xxx"），
+            # 由 _parse_table_data_to_model_data 按单位换算到「人民币元」后存储
+            model_data = _parse_table_data_to_model_data(
+                table_obj.table_data,
+                model_class,
+                unit_str=table_obj.unit or "",
+            )
 
             if not model_data:
                 db_logger.warning(f"表格 {table_name} 未能解析出有效数据")

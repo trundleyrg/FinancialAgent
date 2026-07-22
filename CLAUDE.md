@@ -63,7 +63,9 @@ mypy src/
 
 4. **Database** (`src/db/`) - 数据持久化
    - `db_connector.py`: `DatabaseConnector` 类 - PostgreSQL 和 DuckDB 的统一接口，提供 CRUD 操作
-   - `models.py`: Peewee ORM 模型 + Pydantic 数据验证模型
+   - `db_connector.py`: `parse_chinese_unit_to_factor(unit_str)` - 将 PDF 报表抬头的"单位：xxx"换算到「人民币元」
+   - `db_connector.py`: `_parse_table_data_to_model_data(table_data, model_class, unit_str)` - 解析表格数据并按单位换算；每股收益字段不参与换算
+   - `models.py`: Peewee ORM 模型 + Pydantic 数据验证模型；依据财政部财会〔2014〕6号、〔2018〕15号、〔2019〕6号/16号、〔2023〕21号、〔2024〕24号 标准设计
 
 5. **Utils** (`src/utils/`)
    - `logger.py`: LoggerManager，包含预定义日志器（pdf_logger, chapter_logger, db_logger 等）
@@ -89,6 +91,23 @@ mypy src/
 支持的类型（多选）: `cyclical`, `dividend`, `growth`, `value`, `defensive`, `fundamental`
 
 分类配置: `src/stock_tools/stock_type_config.py` - 修改 `STOCK_TYPE_KEYWORDS` 可调整规则
+
+## 财务报表单位规范
+
+所有从 PDF 提取的财务数据必须**统一换算到「人民币元」**后入库。
+
+- 单位识别：依靠 `PDFChapterExtractor` 提取的 `TableWithHeader.unit` 字段（来自报表抬头"单位：xxx"）
+- 单位换算由 `src/db/db_connector.py:parse_chinese_unit_to_factor` 实现：
+  - 元 → 1；千元 → 1,000；万元 → 10,000；百万元 → 1,000,000；亿元 → 100,000,000
+  - "人民币元/万元" 等前缀会自动剥离
+- 每股收益字段（help_text 含"每股"）不参与金额换算，保持「元/股」
+- 项目范围：**仅考虑人民币元计价的国内企业报表**，不做汇率换算
+
+参考资料：
+
+- 财政部《企业会计准则第 30 号——财务报表列报》（财会〔2014〕6 号）
+- 财政部《关于修订印发合并财务报表格式（2019 版）的通知》（财会〔2019〕16 号）
+- 详细标准：[docs/合并资产负债表标准.md](docs/合并资产负债表标准.md)、[docs/合并利润表标准.md](docs/合并利润表标准.md)、[docs/合并现金流量表标准.md](docs/合并现金流量表标准.md)、[docs/财报三表索引.md](docs/财报三表索引.md)
 
 ## 核心工作流
 
