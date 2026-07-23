@@ -149,6 +149,28 @@ python script/init_postgresql_db.py --reset
 - 财政部《关于修订印发合并财务报表格式（2019 版）的通知》（财会〔2019〕16 号）
 - 详细标准：[docs/合并资产负债表标准.md](docs/合并资产负债表标准.md)、[docs/合并利润表标准.md](docs/合并利润表标准.md)、[docs/合并现金流量表标准.md](docs/合并现金流量表标准.md)、[docs/财报三表索引.md](docs/财报三表索引.md)
 
+## 母公司报表与合并报表的差异
+
+[src/db/models.py](src/db/models.py) 中 6 张主要报表分两组：合并报表（3 张）+ 母公司报表（3 张）。
+两组共用相同的「单位换算到人民币元」规范，但在结构与项目上有重要差异：
+
+| 维度 | 合并报表 | 母公司报表 |
+|---|---|---|
+| 视角 | 集团（含子公司） | 单一法人（母公司自身） |
+| 长期股权投资 | 抵消后按权益法 | 按**成本法**全额列示对子公司投资 |
+| 内部往来 | 已抵消 | 完整列示 |
+| 商誉 | 单列（合并成本 > 可辨认净资产公允价值） | **不存在** |
+| 少数股东权益 / 少数股东损益 | 单列 | **不存在** |
+| 投资收益 | 含权益法对联营/合营企业投资收益 | 主要为子公司分红（成本法） |
+| 利润表编号 | 一/二/三/四/五/六/七/八 | **一/二/三/四/五/六/七**（编号前移） |
+
+`src/db/models.py` 已按此差异严格划分字段：
+- `ParentCompanyBalanceSheet` 无 `minority_interest`、`total_equity_attributable_to_parent_company`、`goodwill` 业务通常为 NULL
+- `ParentCompanyIncomeStatement` 无 `net_profit_attributable_to_parent`、`minority_interest_net_profit`、`*_attributable_to_minority` 等
+- `ParentCompanyCashFlowStatement` 无 `capital_contribution_from_minority`、`dividend_to_minority` 等
+
+详细差异与编号对照表：[docs/母公司三表索引.md](docs/母公司三表索引.md)、[docs/母公司资产负债表标准.md](docs/母公司资产负债表标准.md)、[docs/母公司利润表标准.md](docs/母公司利润表标准.md)、[docs/母公司现金流量表标准.md](docs/母公司现金流量表标准.md)
+
 ## 核心工作流
 
 主图（`src/graph/graph.py`）实现以下流程：
