@@ -717,7 +717,6 @@ PARENT_ROW_CANONICAL_TO_FIELD = {
         "固定资产": "fixed_assets",
         "在建工程": "construction_in_progress",
         "无形资产": "intangible_assets",
-        "商誉": "goodwill",
         "长期待摊费用": "long_term_prepaid_expenses",
         "递延所得税资产": "deferred_tax_assets",
         "短期借款": "short_term_borrowings",
