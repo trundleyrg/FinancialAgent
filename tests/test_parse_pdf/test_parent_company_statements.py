@@ -54,3 +54,53 @@ def test_parent_balance_sheet_ignores_goodwill_and_minority():
     assert result.get("monetary_funds") == 10_000.00
     assert "goodwill" not in result
     assert "minority_interest" not in result
+
+
+from src.db.db_connector import save_tables_to_db
+from src.db.table_models import TableWithHeader
+
+
+class _FakeConnector:
+    def __init__(self):
+        self.created = []
+
+    def insert_record(self, table_name, **kwargs):
+        self.created.append((table_name, kwargs))
+        return 1
+
+
+def _fake_table(table_data, unit="元"):
+    return TableWithHeader(
+        table_data=[["项目", "本期金额"]] + table_data,
+        header_text="",
+        page_start_num=0,
+        page_end_num=0,
+        bbox=(0, 0, 0, 0),
+        is_merged=False,
+        unit=unit,
+    )
+
+
+def test_save_drops_parent_only_invariants(monkeypatch):
+    connector = _FakeConnector()
+    table = _fake_table([("货币资金", "10.00"), ("商誉", "9,999.00")])
+    monkeypatch.setattr(
+        "src.db.db_connector.TABLE_NAME_TO_MODEL",
+        {"母公司资产负债表": ParentCompanyBalanceSheet},
+    )
+    save_tables_to_db(
+        main_tables={"母公司资产负债表": table},
+        company_name="东阿阿胶",
+        pdf_path="x.pdf",
+        company_short_name="东阿",
+        company_code="000423",
+        report_year=2024,
+        report_period="FY",
+        db_connector=connector,
+    )
+    assert connector.created, "expected at least one record"
+    table_name, data = connector.created[0]
+    assert table_name == "parent_company_balance_sheet"
+    assert data["monetary_funds"] == 10.0
+    assert "goodwill" not in data
+    assert "minority_interest" not in data

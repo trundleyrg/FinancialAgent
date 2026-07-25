@@ -1161,6 +1161,30 @@ def save_tables_to_db(main_tables: Dict[str, Any], company_name: str, pdf_path:s
                 db_logger.warning(f"表格 {table_name} 未能解析出有效数据")
                 continue
 
+            PARENT_INVALID_FIELDS = {
+                ParentCompanyBalanceSheet: ("goodwill", "minority_interest"),
+                ParentCompanyIncomeStatement: (
+                    "net_profit_attributable_to_parent",
+                    "minority_interest_net_profit",
+                    "comprehensive_income_attributable_to_minority",
+                    "oci_attributable_to_minority",
+                ),
+                ParentCompanyCashFlowStatement: (
+                    "capital_contribution_from_minority",
+                    "dividend_to_minority",
+                ),
+            }
+
+            for invalid_field in PARENT_INVALID_FIELDS.get(model_class, ()):  # type: ignore[arg-type]
+                if model_data.get(invalid_field):
+                    db_logger.warning(
+                        "save_tables_to_db: %s 不应在母公司报表中出现，丢弃 %s=%s",
+                        normalized_name,
+                        invalid_field,
+                        model_data[invalid_field],
+                    )
+                    model_data.pop(invalid_field, None)
+
             # 添加基础信息
             model_data['company_name'] = company_name
             model_data['stock_code'] = stock_code
