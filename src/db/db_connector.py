@@ -5,6 +5,12 @@
 import os
 import re
 from dotenv import load_dotenv
+
+# Pre-compiled regexes used by _normalize_row when parsing Chinese parent-company
+# financial statement rows. The first strips punctuation/whitespace; the second
+# strips an optional numeric or Chinese ordinal prefix such as "（一）" / "(二十）".
+_ROW_PUNCT_RE = re.compile(r"[：:（）()\s\n]")
+_ROW_PREFIX_RE = re.compile(r"^[（(]?(?:\d+|[一二三四五六七八九十]+)[）)]?[\s、:：]?")
 from peewee import *
 from typing import List, Optional, Dict, Any, Type
 import pandas as pd
@@ -732,7 +738,6 @@ PARENT_ROW_CANONICAL_TO_FIELD = {
         "固定资产": "fixed_assets",
         "在建工程": "construction_in_progress",
         "无形资产": "intangible_assets",
-        "商誉": "goodwill",
         "长期待摊费用": "long_term_prepaid_expenses",
         "递延所得税资产": "deferred_tax_assets",
         "短期借款": "short_term_borrowings",
@@ -855,12 +860,13 @@ def _parse_table_data_to_model_data(
     def _normalize_row(label: str) -> str:
         if not label:
             return ""
-        cleaned = re.sub(r"[：:（）()\s\n]", "", str(label))
+        cleaned = _ROW_PUNCT_RE.sub("", str(label))
         # 去除前缀数字或"（一）...（二十）"形式的顺序编号
-        cleaned = re.sub(r"^[（(]?\d+[）)]?[\s、:：]?", "", cleaned)
+        cleaned = _ROW_PREFIX_RE.sub("", cleaned)
         return cleaned
 
     parent_canonicals = PARENT_ROW_CANONICAL_TO_FIELD.get(model_class.__name__, {})
+    invalid_for_parent = PARENT_INVALID_FIELDS.get(model_class, ())
 
     # 获取模型的字段名和帮助文本映射
     field_help_text_map = {}
@@ -895,13 +901,10 @@ def _parse_table_data_to_model_data(
         if not canonical_field:
             suffix_matches = [
                 field for token, field in parent_canonicals.items()
-                if token and token in normalized and normalized.endswith(token)
+                if token and normalized.endswith(token)
             ]
             if len(suffix_matches) == 1:
                 canonical_field = suffix_matches[0]
-
-        # Fields that must never receive a value on parent-company models.
-        invalid_for_parent = set(PARENT_INVALID_FIELDS.get(model_class, ()))
 
         # Stage 2: help_text substring match (current behavior).
         if not canonical_field:
@@ -925,8 +928,6 @@ def _parse_table_data_to_model_data(
 
         # Resolve final field name.
         final_field = canonical_field or field_name
-        if final_field and final_field in invalid_for_parent:
-            final_field = None
 
         if not final_field:
             db_logger.debug(
@@ -1202,7 +1203,7 @@ def save_tables_to_db(main_tables: Dict[str, Any], company_name: str, pdf_path:s
                 db_logger.warning(f"表格 {table_name} 未能解析出有效数据")
                 continue
 
-            for invalid_field in PARENT_INVALID_FIELDS.get(model_class, ()):  # type: ignore[arg-type]
+            for invalid_field in PARENT_INVALID_FIELDS.get(model_class, ()):
                 if model_data.get(invalid_field):
                     db_logger.warning(
                         "save_tables_to_db: %s 不应在母公司报表中出现，丢弃 %s=%s",

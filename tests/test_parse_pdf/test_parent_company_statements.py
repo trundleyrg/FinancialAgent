@@ -1,9 +1,10 @@
-from src.db.db_connector import _parse_table_data_to_model_data
+from src.db.db_connector import _parse_table_data_to_model_data, save_tables_to_db
 from src.db.models import (
     ParentCompanyBalanceSheet,
     ParentCompanyIncomeStatement,
     ParentCompanyCashFlowStatement,
 )
+from src.db.table_models import TableWithHeader
 
 
 def _table(rows):
@@ -86,10 +87,6 @@ def test_parent_parser_matches_net_hedge_gain():
     assert result.get("net_hedge_gain") == 123.45
 
 
-from src.db.db_connector import save_tables_to_db
-from src.db.table_models import TableWithHeader
-
-
 class _FakeConnector:
     def __init__(self):
         self.created = []
@@ -141,8 +138,7 @@ def test_save_drops_parent_only_invariants(monkeypatch):
         if name == "parent_company_balance_sheet"
     ]
     assert parent_entries, "expected parent_company_balance_sheet record"
-    table_name, data = parent_entries[0]
-    assert table_name == "parent_company_balance_sheet"
+    _, data = parent_entries[0]
     assert data["monetary_funds"] == 10.0
     assert "goodwill" not in data
     assert "minority_interest" not in data
