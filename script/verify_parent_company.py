@@ -33,7 +33,7 @@ def _pdf_value(cells):
     raw = str(cells[1]).strip() if len(cells) > 1 else ""
     if not raw or raw in {"-", "—", "--"}:
         return None
-    cleaned = raw.replace(",", "").replace("，").replace("元", "")
+    cleaned = raw.replace(",", "").replace("，", "").replace("元", "")
     if "(" in cleaned and ")" in cleaned:
         cleaned = "-" + cleaned.replace("(", "").replace(")", "")
     try:
