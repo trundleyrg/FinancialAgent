@@ -105,7 +105,13 @@ def test_save_drops_parent_only_invariants(monkeypatch):
         db_connector=connector,
     )
     assert connector.created, "expected at least one record"
-    table_name, data = connector.created[0]
+    parent_entries = [
+        (name, payload)
+        for name, payload in connector.created
+        if name == "parent_company_balance_sheet"
+    ]
+    assert parent_entries, "expected parent_company_balance_sheet record"
+    table_name, data = parent_entries[0]
     assert table_name == "parent_company_balance_sheet"
     assert data["monetary_funds"] == 10.0
     assert "goodwill" not in data

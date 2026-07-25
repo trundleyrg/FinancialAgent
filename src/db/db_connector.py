@@ -693,6 +693,21 @@ def parse_chinese_unit_to_factor(unit_str: str) -> float:
     return 1.0
 
 
+PARENT_INVALID_FIELDS = {
+    ParentCompanyBalanceSheet: ("goodwill", "minority_interest"),
+    ParentCompanyIncomeStatement: (
+        "net_profit_attributable_to_parent",
+        "minority_interest_net_profit",
+        "comprehensive_income_attributable_to_minority",
+        "oci_attributable_to_minority",
+    ),
+    ParentCompanyCashFlowStatement: (
+        "capital_contribution_from_minority",
+        "dividend_to_minority",
+    ),
+}
+
+
 def _is_per_share_field(model_class: Type[Model], field_name: str) -> bool:
     """判断字段是否为「每股」类指标（元/股），不需要按金额单位换算。"""
     if not field_name:
@@ -872,9 +887,14 @@ def _parse_table_data_to_model_data(
         # Stage 1: canonical-row fallback for parent tables.
         canonical_field = parent_canonicals.get(normalized)
 
+        # Fields that must never receive a value on parent-company models.
+        invalid_for_parent = set(PARENT_INVALID_FIELDS.get(model_class, ()))
+
         # Stage 2: help_text substring match (current behavior).
         if not canonical_field:
             for help_text, fn in field_help_text_map.items():
+                if fn in invalid_for_parent:
+                    continue
                 if help_text in item_name_normalized or item_name_normalized in help_text:
                     field_name = fn
                     break
@@ -883,6 +903,8 @@ def _parse_table_data_to_model_data(
         if not canonical_field and not field_name:
             normalized_item = item_name.replace(" ", "").replace("_", "").replace("\n", "").lower()
             for fn in fields.keys():
+                if fn in invalid_for_parent:
+                    continue
                 normalized_field = fn.replace("_", "").lower()
                 if normalized_field in normalized_item or normalized_item in normalized_field:
                     field_name = fn
@@ -890,6 +912,8 @@ def _parse_table_data_to_model_data(
 
         # Resolve final field name.
         final_field = canonical_field or field_name
+        if final_field and final_field in invalid_for_parent:
+            final_field = None
 
         # 解析数值
         if final_field and value_str:
@@ -1159,20 +1183,6 @@ def save_tables_to_db(main_tables: Dict[str, Any], company_name: str, pdf_path:s
             if not model_data:
                 db_logger.warning(f"表格 {table_name} 未能解析出有效数据")
                 continue
-
-            PARENT_INVALID_FIELDS = {
-                ParentCompanyBalanceSheet: ("goodwill", "minority_interest"),
-                ParentCompanyIncomeStatement: (
-                    "net_profit_attributable_to_parent",
-                    "minority_interest_net_profit",
-                    "comprehensive_income_attributable_to_minority",
-                    "oci_attributable_to_minority",
-                ),
-                ParentCompanyCashFlowStatement: (
-                    "capital_contribution_from_minority",
-                    "dividend_to_minority",
-                ),
-            }
 
             for invalid_field in PARENT_INVALID_FIELDS.get(model_class, ()):  # type: ignore[arg-type]
                 if model_data.get(invalid_field):
