@@ -275,6 +275,10 @@ class ParentCompanyBalanceSheet(Model):
     advance_from_customers = FloatField(null=True, help_text="预收款项")
     contract_liabilities = FloatField(null=True, help_text="合同负债")
     employee_benefits_payable = FloatField(null=True, help_text="应付职工薪酬")
+    employee_benefits_payable_current_period = FloatField(
+        null=True,
+        help_text="应付职工薪酬-本期发生额（年报中以“本期发生额-应付职工薪酬”或类似行名单独列示的当期发生额）",
+    )
     taxes_payable = FloatField(null=True, help_text="应交税费")
     other_payables = FloatField(null=True, help_text="其他应付款")
     interest_payable = FloatField(null=True, help_text="其中：应付利息")

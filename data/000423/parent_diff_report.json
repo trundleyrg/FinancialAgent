@@ -1,0 +1,205 @@
+{
+  "summary": {
+    "2016": {
+      "母公司资产负债表": {
+        "matched": 47,
+        "mismatched": 0,
+        "missing_in_db": 0,
+        "unmatched_rows": 31
+      },
+      "母公司利润表": {
+        "matched": 10,
+        "mismatched": 0,
+        "missing_in_db": 0,
+        "unmatched_rows": 23
+      },
+      "母公司现金流量表": {
+        "matched": 22,
+        "mismatched": 0,
+        "missing_in_db": 0,
+        "unmatched_rows": 17
+      }
+    },
+    "2017": {
+      "母公司资产负债表": {
+        "matched": 47,
+        "mismatched": 0,
+        "missing_in_db": 0,
+        "unmatched_rows": 31
+      },
+      "母公司利润表": {
+        "matched": 10,
+        "mismatched": 0,
+        "missing_in_db": 0,
+        "unmatched_rows": 22
+      },
+      "母公司现金流量表": {
+        "matched": 22,
+        "mismatched": 0,
+        "missing_in_db": 0,
+        "unmatched_rows": 17
+      }
+    },
+    "2018": {
+      "母公司资产负债表": {
+        "matched": 48,
+        "mismatched": 0,
+        "missing_in_db": 0,
+        "unmatched_rows": 27
+      },
+      "母公司利润表": {
+        "matched": 15,
+        "mismatched": 0,
+        "missing_in_db": 1,
+        "unmatched_rows": 22
+      },
+      "母公司现金流量表": {
+        "matched": 23,
+        "mismatched": 0,
+        "missing_in_db": 0,
+        "unmatched_rows": 16
+      }
+    },
+    "2019": {
+      "母公司资产负债表": {
+        "matched": 55,
+        "mismatched": 0,
+        "missing_in_db": 0,
+        "unmatched_rows": 31
+      },
+      "母公司利润表": {
+        "matched": 18,
+        "mismatched": 0,
+        "missing_in_db": 1,
+        "unmatched_rows": 28
+      },
+      "母公司现金流量表": {
+        "matched": 23,
+        "mismatched": 0,
+        "missing_in_db": 0,
+        "unmatched_rows": 15
+      }
+    },
+    "2020": {
+      "母公司资产负债表": {
+        "matched": 55,
+        "mismatched": 0,
+        "missing_in_db": 0,
+        "unmatched_rows": 27
+      },
+      "母公司利润表": {
+        "matched": 22,
+        "mismatched": 0,
+        "missing_in_db": 1,
+        "unmatched_rows": 22
+      },
+      "母公司现金流量表": {
+        "matched": 23,
+        "mismatched": 0,
+        "missing_in_db": 0,
+        "unmatched_rows": 15
+      }
+    },
+    "2021": {
+      "母公司资产负债表": {
+        "matched": 55,
+        "mismatched": 0,
+        "missing_in_db": 0,
+        "unmatched_rows": 27
+      },
+      "母公司利润表": {
+        "matched": 22,
+        "mismatched": 0,
+        "missing_in_db": 1,
+        "unmatched_rows": 22
+      },
+      "母公司现金流量表": {
+        "matched": 25,
+        "mismatched": 0,
+        "missing_in_db": 0,
+        "unmatched_rows": 13
+      }
+    },
+    "2022": {
+      "母公司资产负债表": {
+        "matched": 55,
+        "mismatched": 0,
+        "missing_in_db": 0,
+        "unmatched_rows": 27
+      },
+      "母公司利润表": {
+        "matched": 22,
+        "mismatched": 0,
+        "missing_in_db": 1,
+        "unmatched_rows": 22
+      },
+      "母公司现金流量表": {
+        "matched": 22,
+        "mismatched": 0,
+        "missing_in_db": 0,
+        "unmatched_rows": 17
+      }
+    },
+    "2023": {
+      "母公司资产负债表": {
+        "matched": 55,
+        "mismatched": 0,
+        "missing_in_db": 0,
+        "unmatched_rows": 27
+      },
+      "母公司利润表": {
+        "matched": 22,
+        "mismatched": 0,
+        "missing_in_db": 1,
+        "unmatched_rows": 22
+      },
+      "母公司现金流量表": {
+        "matched": 24,
+        "mismatched": 0,
+        "missing_in_db": 0,
+        "unmatched_rows": 14
+      }
+    },
+    "2024": {
+      "母公司资产负债表": {
+        "matched": 55,
+        "mismatched": 0,
+        "missing_in_db": 0,
+        "unmatched_rows": 30
+      },
+      "母公司利润表": {
+        "matched": 14,
+        "mismatched": 0,
+        "missing_in_db": 0,
+        "unmatched_rows": 32
+      },
+      "母公司现金流量表": {
+        "matched": 22,
+        "mismatched": 0,
+        "missing_in_db": 0,
+        "unmatched_rows": 16
+      }
+    },
+    "2025": {
+      "母公司资产负债表": {
+        "matched": 55,
+        "mismatched": 0,
+        "missing_in_db": 0,
+        "unmatched_rows": 30
+      },
+      "母公司利润表": {
+        "matched": 22,
+        "mismatched": 0,
+        "missing_in_db": 1,
+        "unmatched_rows": 22
+      },
+      "母公司现金流量表": {
+        "matched": 22,
+        "mismatched": 0,
+        "missing_in_db": 0,
+        "unmatched_rows": 16
+      }
+    }
+  },
+  "differences": []
+}
