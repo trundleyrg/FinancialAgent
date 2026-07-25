@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 # Pre-compiled regexes used by _normalize_row when parsing Chinese parent-company
 # financial statement rows. The first strips punctuation/whitespace; the second
 # strips an optional numeric or Chinese ordinal prefix such as "（一）" / "(二十）".
-_ROW_PUNCT_RE = re.compile(r"[：:（）()\s\n]")
+_ROW_PUNCT_RE = re.compile(r"[：:（）()\s\n\-—–－]")
 _ROW_PREFIX_RE = re.compile(r"^[（(]?(?:\d+|[一二三四五六七八九十]+)[）)]?[\s、:：]?")
 from peewee import *
 from typing import List, Optional, Dict, Any, Type
@@ -746,6 +746,7 @@ PARENT_ROW_CANONICAL_TO_FIELD = {
         "预收款项": "advance_from_customers",
         "合同负债": "contract_liabilities",
         "应付职工薪酬": "employee_benefits_payable",
+        "本期发生额应付职工薪酬": "employee_benefits_payable_current_period",
         "应交税费": "taxes_payable",
         "其他应付款": "other_payables",
         "长期借款": "long_term_borrowings",

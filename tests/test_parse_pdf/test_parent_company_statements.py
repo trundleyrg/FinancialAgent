@@ -87,6 +87,20 @@ def test_parent_parser_matches_net_hedge_gain():
     assert result.get("net_hedge_gain") == 123.45
 
 
+def test_parent_balance_sheet_splits_employee_benefits_periods():
+    data = _table(
+        [
+            ("应付职工薪酬", "10,000.00"),
+            ("本期发生额-应付职工薪酬", "79,702,912.94"),
+        ]
+    )
+    result = _parse_table_data_to_model_data(
+        data, ParentCompanyBalanceSheet, unit_str="元"
+    )
+    assert result.get("employee_benefits_payable") == 10_000.00
+    assert result.get("employee_benefits_payable_current_period") == 79_702_912.94
+
+
 class _FakeConnector:
     def __init__(self):
         self.created = []
