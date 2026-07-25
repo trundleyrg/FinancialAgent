@@ -747,6 +747,7 @@ PARENT_ROW_CANONICAL_TO_FIELD = {
         "合同负债": "contract_liabilities",
         "应付职工薪酬": "employee_benefits_payable",
         "本期发生额应付职工薪酬": "employee_benefits_payable_current_period",
+        "长期应付职工薪酬": "long_term_employee_benefits_payable",
         "应交税费": "taxes_payable",
         "其他应付款": "other_payables",
         "长期借款": "long_term_borrowings",

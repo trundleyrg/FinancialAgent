@@ -82,9 +82,9 @@
     },
     "2020": {
       "母公司资产负债表": {
-        "matched": 53,
-        "mismatched": 1,
-        "missing_in_db": 1,
+        "matched": 55,
+        "mismatched": 0,
+        "missing_in_db": 0,
         "unmatched_rows": 27
       },
       "母公司利润表": {
@@ -102,9 +102,9 @@
     },
     "2021": {
       "母公司资产负债表": {
-        "matched": 53,
-        "mismatched": 1,
-        "missing_in_db": 1,
+        "matched": 55,
+        "mismatched": 0,
+        "missing_in_db": 0,
         "unmatched_rows": 27
       },
       "母公司利润表": {
@@ -122,9 +122,9 @@
     },
     "2022": {
       "母公司资产负债表": {
-        "matched": 53,
-        "mismatched": 1,
-        "missing_in_db": 1,
+        "matched": 55,
+        "mismatched": 0,
+        "missing_in_db": 0,
         "unmatched_rows": 27
       },
       "母公司利润表": {
@@ -142,9 +142,9 @@
     },
     "2023": {
       "母公司资产负债表": {
-        "matched": 53,
-        "mismatched": 1,
-        "missing_in_db": 1,
+        "matched": 55,
+        "mismatched": 0,
+        "missing_in_db": 0,
         "unmatched_rows": 27
       },
       "母公司利润表": {
@@ -162,9 +162,9 @@
     },
     "2024": {
       "母公司资产负债表": {
-        "matched": 53,
-        "mismatched": 1,
-        "missing_in_db": 1,
+        "matched": 55,
+        "mismatched": 0,
+        "missing_in_db": 0,
         "unmatched_rows": 30
       },
       "母公司利润表": {
@@ -182,9 +182,9 @@
     },
     "2025": {
       "母公司资产负债表": {
-        "matched": 53,
-        "mismatched": 1,
-        "missing_in_db": 1,
+        "matched": 55,
+        "mismatched": 0,
+        "missing_in_db": 0,
         "unmatched_rows": 30
       },
       "母公司利润表": {
@@ -201,48 +201,5 @@
       }
     }
   },
-  "differences": [
-    {
-      "year": 2020,
-      "table": "母公司资产负债表",
-      "field": "employee_benefits_payable",
-      "pdf_value": 79702912.94,
-      "db_value": 62065000.0
-    },
-    {
-      "year": 2021,
-      "table": "母公司资产负债表",
-      "field": "employee_benefits_payable",
-      "pdf_value": 160190667.08,
-      "db_value": 61209000.0
-    },
-    {
-      "year": 2022,
-      "table": "母公司资产负债表",
-      "field": "employee_benefits_payable",
-      "pdf_value": 246720533.52,
-      "db_value": 57954000.0
-    },
-    {
-      "year": 2023,
-      "table": "母公司资产负债表",
-      "field": "employee_benefits_payable",
-      "pdf_value": 288867903.21,
-      "db_value": 57347000.0
-    },
-    {
-      "year": 2024,
-      "table": "母公司资产负债表",
-      "field": "employee_benefits_payable",
-      "pdf_value": 317977577.22,
-      "db_value": 63925000.0
-    },
-    {
-      "year": 2025,
-      "table": "母公司资产负债表",
-      "field": "employee_benefits_payable",
-      "pdf_value": 349803343.1,
-      "db_value": 60541000.0
-    }
-  ]
+  "differences": []
 }

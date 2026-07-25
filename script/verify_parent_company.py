@@ -42,6 +42,24 @@ def _pdf_value(cells):
         return None
 
 
+# Labels that map to the period-split field for ParentCompanyBalanceSheet,
+# distinguishing the period-flow value from the year-end value.
+PARENT_PERIOD_SPLIT_LABELS = {
+    "本期发生额-应付职工薪酬",
+    "本期发生额应付职工薪酬",
+}
+
+
+def _resolve_field(model_class, label: str):
+    field_map = {f.help_text: name for name, f in model_class._meta.fields.items()
+                 if getattr(f, "help_text", None)}
+    if label in PARENT_PERIOD_SPLIT_LABELS:
+        return "employee_benefits_payable_current_period"
+    if label in field_map:
+        return field_map[label]
+    return None
+
+
 def _db_row(db_path: str, table_name: str, year: int):
     con = duckdb.connect(db_path, read_only=True)
     try:
@@ -78,15 +96,13 @@ def _compare_year(year: int, pdf_path: str, db_path: str):
             continue
 
         db_row = _db_row(db_path, db_table, year) or {}
-        field_map = {f.help_text: name for name, f in model_class._meta.fields.items()
-                     if getattr(f, "help_text", None)}
         matched = mismatched = missing = unmatched = 0
         for idx in range(1, len(table_obj.table_data)):
             cells = table_obj.table_data[idx]
             if not cells:
                 continue
             label = str(cells[0]).strip()
-            field = field_map.get(label)
+            field = _resolve_field(model_class, label)
             if not field:
                 unmatched += 1
                 continue
