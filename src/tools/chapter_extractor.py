@@ -112,7 +112,30 @@ class PDFChapterExtractor:
                 report_period = 'FY'
             if report_period is not None:
                 break
-        
+
+        if not company_code and (company_name or company_short_name):
+            try:
+                from src.tools.a_share_code_lookup import AShareCodeLookup
+
+                lookup = getattr(self, "_a_share_lookup", None)
+                if lookup is None:
+                    lookup = AShareCodeLookup()
+                    self._a_share_lookup = lookup
+                # CSV 数据源仅含股票简称；无“公司简称”标签时从全称剥离公司后缀作为简称查询
+                lookup_short_name = company_short_name or re.sub(
+                    r"(?:股份有限公司|有限公司)$", "", company_name
+                )
+                resolved = lookup.lookup(company_name, lookup_short_name)
+                if resolved:
+                    company_code = resolved
+                    chapter_logger.info(
+                        "get_company_info: 通过本地 CSV 回退得到股票代码 %s (company_name=%r)",
+                        company_code,
+                        company_name,
+                    )
+            except FileNotFoundError:
+                chapter_logger.warning("get_company_info: A-share CSV 缺失，跳过本地回退")
+
         return company_name, company_short_name, company_code, year, report_period
 
     
