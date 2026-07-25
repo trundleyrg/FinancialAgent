@@ -3,6 +3,7 @@
 统一使用models.py中的模型定义，提供一致的ORM风格接口
 """
 import os
+import re
 from dotenv import load_dotenv
 from peewee import *
 from typing import List, Optional, Dict, Any, Type
@@ -703,6 +704,111 @@ def _is_per_share_field(model_class: Type[Model], field_name: str) -> bool:
     return '每股' in help_text
 
 
+PARENT_ROW_CANONICAL_TO_FIELD = {
+    "ParentCompanyBalanceSheet": {
+        "货币资金": "monetary_funds",
+        "应收票据": "notes_receivable",
+        "应收账款": "accounts_receivable",
+        "预付款项": "prepayments",
+        "其他应收款": "other_receivables",
+        "存货": "inventory",
+        "长期股权投资": "long_term_equity_investments",
+        "投资性房地产": "investment_real_estate",
+        "固定资产": "fixed_assets",
+        "在建工程": "construction_in_progress",
+        "无形资产": "intangible_assets",
+        "商誉": "goodwill",
+        "长期待摊费用": "long_term_prepaid_expenses",
+        "递延所得税资产": "deferred_tax_assets",
+        "短期借款": "short_term_borrowings",
+        "应付票据": "notes_payable",
+        "应付账款": "accounts_payable",
+        "预收款项": "advance_from_customers",
+        "合同负债": "contract_liabilities",
+        "应付职工薪酬": "employee_benefits_payable",
+        "应交税费": "taxes_payable",
+        "其他应付款": "other_payables",
+        "长期借款": "long_term_borrowings",
+        "递延收益": "deferred_income",
+        "递延所得税负债": "deferred_tax_liabilities",
+        "实收资本（或股本）": "paid_in_capital",
+        "资本公积": "capital_reserve",
+        "其他综合收益": "other_comprehensive_income",
+        "盈余公积": "surplus_reserve",
+        "未分配利润": "retained_earnings",
+        "所有者权益（或股东权益）合计": "total_owners_equity",
+        "负债和所有者权益总计": "total_liabilities_and_owners_equity",
+        "资产总计": "total_assets",
+        "流动资产合计": "total_current_assets",
+        "非流动资产合计": "total_non_current_assets",
+        "流动负债合计": "total_current_liabilities",
+        "非流动负债合计": "total_non_current_liabilities",
+        "负债合计": "total_liabilities",
+    },
+    "ParentCompanyIncomeStatement": {
+        "一、营业收入": "operating_revenue",
+        "减营业成本": "operating_costs",
+        "税金及附加": "taxes_and_surcharges",
+        "销售费用": "selling_expenses",
+        "管理费用": "administrative_expenses",
+        "研发费用": "research_and_development_expenses",
+        "财务费用": "financial_expenses",
+        "其他收益": "other_income",
+        "投资收益": "investment_income",
+        "公允价值变动收益": "fair_value_change_income",
+        "信用减值损失": "credit_impairment_loss",
+        "资产减值损失": "asset_impairment_loss",
+        "资产处置收益": "asset_disposal_income",
+        "营业利润": "operating_profit",
+        "加营业外收入": "non_operating_income",
+        "减营业外支出": "non_operating_expenses",
+        "利润总额": "total_profit",
+        "减所得税费用": "income_tax_expense",
+        "净利润": "net_profit",
+        "综合收益总额": "total_comprehensive_income",
+        "基本每股收益": "basic_eps",
+        "稀释每股收益": "diluted_eps",
+    },
+    "ParentCompanyCashFlowStatement": {
+        "销售商品、提供劳务收到的现金": "cash_from_sales",
+        "收到的税费返还": "tax_refund",
+        "收到其他与经营活动有关的现金": "other_cash_from_operations",
+        "经营活动现金流入小计": "operating_cash_inflows",
+        "购买商品、接受劳务支付的现金": "cash_for_goods",
+        "支付给职工以及为职工支付的现金": "cash_to_employees",
+        "支付的各项税费": "taxes_paid",
+        "支付其他与经营活动有关的现金": "other_cash_for_operations",
+        "经营活动现金流出小计": "operating_cash_outflows",
+        "经营活动产生的现金流量净额": "net_cash_from_operations",
+        "收回投资收到的现金": "cash_from_investment_disposal",
+        "取得投资收益收到的现金": "investment_income_received",
+        "处置固定资产、无形资产和其他长期资产收回的现金净额": "cash_from_fixed_asset_disposal",
+        "处置子公司及其他营业单位收到的现金净额": "cash_from_subsidiary_disposal",
+        "收到其他与投资活动有关的现金": "other_cash_from_investing",
+        "投资活动现金流入小计": "investing_cash_inflows",
+        "购建固定资产、无形资产和其他长期资产支付的现金": "cash_for_fixed_assets",
+        "投资支付的现金": "cash_for_investments",
+        "取得子公司及其他营业单位支付的现金净额": "cash_for_subsidiary_acquisition",
+        "支付其他与投资活动有关的现金": "other_cash_for_investing",
+        "投资活动现金流出小计": "investing_cash_outflows",
+        "投资活动产生的现金流量净额": "net_cash_from_investing",
+        "吸收投资收到的现金": "cash_from_capital_contribution",
+        "取得借款收到的现金": "cash_from_borrowing",
+        "收到其他与筹资活动有关的现金": "other_cash_from_financing",
+        "筹资活动现金流入小计": "financing_cash_inflows",
+        "偿还债务支付的现金": "cash_for_debt_repayment",
+        "分配股利、利润或偿付利息支付的现金": "cash_for_dividend_and_interest",
+        "支付其他与筹资活动有关的现金": "other_cash_for_financing",
+        "筹资活动现金流出小计": "financing_cash_outflows",
+        "筹资活动产生的现金流量净额": "net_cash_from_financing",
+        "汇率变动对现金及现金等价物的影响": "exchange_rate_effect",
+        "现金及现金等价物净增加额": "net_increase_in_cash",
+        "加期初现金及现金等价物余额": "beginning_cash",
+        "期末现金及现金等价物余额": "ending_cash",
+    },
+}
+
+
 def _parse_table_data_to_model_data(
     table_data: List[List[str]],
     model_class: Type[Model],
@@ -729,6 +835,13 @@ def _parse_table_data_to_model_data(
     model_data = {}
     fields = model_class._meta.fields
 
+    def _normalize_row(label: str) -> str:
+        if not label:
+            return ""
+        return re.sub(r"[：:（）()\s\n]", "", str(label))
+
+    parent_canonicals = PARENT_ROW_CANONICAL_TO_FIELD.get(model_class.__name__, {})
+
     # 获取模型的字段名和帮助文本映射
     field_help_text_map = {}
     for field_name, field in fields.items():
@@ -754,23 +867,33 @@ def _parse_table_data_to_model_data(
         field_name = None
         # 移除 item_name 中的换行符以便匹配
         item_name_normalized = item_name.replace('\n', '')
-        for help_text, fn in field_help_text_map.items():
-            if help_text in item_name_normalized or item_name_normalized in help_text:
-                field_name = fn
-                break
 
-        # 如果没找到，尝试直接匹配字段名（忽略大小写和下划线）
-        if not field_name:
-            # 移除空格、下划线和换行符
-            normalized_item = item_name.replace(' ', '').replace('_', '').replace('\n', '').lower()
+        normalized = _normalize_row(item_name)
+
+        # Stage 1: canonical-row fallback for parent tables.
+        canonical_field = parent_canonicals.get(normalized)
+
+        # Stage 2: help_text substring match (current behavior).
+        if not canonical_field:
+            for help_text, fn in field_help_text_map.items():
+                if help_text in item_name_normalized or item_name_normalized in help_text:
+                    field_name = fn
+                    break
+
+        # Stage 3: field-name substring match (current behavior).
+        if not canonical_field and not field_name:
+            normalized_item = item_name.replace(" ", "").replace("_", "").replace("\n", "").lower()
             for fn in fields.keys():
-                normalized_field = fn.replace('_', '').lower()
+                normalized_field = fn.replace("_", "").lower()
                 if normalized_field in normalized_item or normalized_item in normalized_field:
                     field_name = fn
                     break
 
+        # Resolve final field name.
+        final_field = canonical_field or field_name
+
         # 解析数值
-        if field_name and value_str:
+        if final_field and value_str:
             try:
                 # 处理常见的数值格式
                 # 移除逗号、空格和单位字符
@@ -798,10 +921,10 @@ def _parse_table_data_to_model_data(
 
                 # 单位换算：金额字段按 unit_factor 放大到「人民币元」
                 # 「每股」类字段（基本/稀释每股收益）保持原值，单位 元/股
-                if not _is_per_share_field(model_class, field_name):
+                if not _is_per_share_field(model_class, final_field):
                     value = value * unit_factor
 
-                model_data[field_name] = value
+                model_data[final_field] = value
             except (ValueError, TypeError):
                 # 如果无法解析为数字，跳过
                 continue
