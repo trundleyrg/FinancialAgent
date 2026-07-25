@@ -56,6 +56,36 @@ def test_parent_balance_sheet_ignores_goodwill_and_minority():
     assert "minority_interest" not in result
 
 
+def test_parent_parser_matches_ordered_prefix():
+    data = _table(
+        [
+            ("（一）货币资金", "5,000.00"),
+            ("（二）应收账款", "1,200.00"),
+        ]
+    )
+    result = _parse_table_data_to_model_data(
+        data, ParentCompanyBalanceSheet, unit_str="元"
+    )
+    assert result.get("monetary_funds") == 5_000.00
+    assert result.get("accounts_receivable") == 1_200.00
+
+
+def test_parent_parser_matches_estimated_liabilities():
+    data = _table([("预计负债", "777.77")])
+    result = _parse_table_data_to_model_data(
+        data, ParentCompanyBalanceSheet, unit_str="元"
+    )
+    assert result.get("estimated_liabilities") == 777.77
+
+
+def test_parent_parser_matches_net_hedge_gain():
+    data = _table([("净敞口套期收益", "123.45")])
+    result = _parse_table_data_to_model_data(
+        data, ParentCompanyIncomeStatement, unit_str="元"
+    )
+    assert result.get("net_hedge_gain") == 123.45
+
+
 from src.db.db_connector import save_tables_to_db
 from src.db.table_models import TableWithHeader
 

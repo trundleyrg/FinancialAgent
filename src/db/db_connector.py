@@ -732,6 +732,7 @@ PARENT_ROW_CANONICAL_TO_FIELD = {
         "固定资产": "fixed_assets",
         "在建工程": "construction_in_progress",
         "无形资产": "intangible_assets",
+        "商誉": "goodwill",
         "长期待摊费用": "long_term_prepaid_expenses",
         "递延所得税资产": "deferred_tax_assets",
         "短期借款": "short_term_borrowings",
@@ -743,6 +744,7 @@ PARENT_ROW_CANONICAL_TO_FIELD = {
         "应交税费": "taxes_payable",
         "其他应付款": "other_payables",
         "长期借款": "long_term_borrowings",
+        "预计负债": "estimated_liabilities",
         "递延收益": "deferred_income",
         "递延所得税负债": "deferred_tax_liabilities",
         "实收资本（或股本）": "paid_in_capital",
@@ -769,6 +771,7 @@ PARENT_ROW_CANONICAL_TO_FIELD = {
         "财务费用": "financial_expenses",
         "其他收益": "other_income",
         "投资收益": "investment_income",
+        "净敞口套期收益": "net_hedge_gain",
         "公允价值变动收益": "fair_value_change_income",
         "信用减值损失": "credit_impairment_loss",
         "资产减值损失": "asset_impairment_loss",
@@ -852,7 +855,10 @@ def _parse_table_data_to_model_data(
     def _normalize_row(label: str) -> str:
         if not label:
             return ""
-        return re.sub(r"[：:（）()\s\n]", "", str(label))
+        cleaned = re.sub(r"[：:（）()\s\n]", "", str(label))
+        # 去除前缀数字或"（一）...（二十）"形式的顺序编号
+        cleaned = re.sub(r"^[（(]?\d+[）)]?[\s、:：]?", "", cleaned)
+        return cleaned
 
     parent_canonicals = PARENT_ROW_CANONICAL_TO_FIELD.get(model_class.__name__, {})
 
@@ -884,8 +890,15 @@ def _parse_table_data_to_model_data(
 
         normalized = _normalize_row(item_name)
 
-        # Stage 1: canonical-row fallback for parent tables.
+        # Stage 1: canonical-row fallback for parent tables (exact, then suffix).
         canonical_field = parent_canonicals.get(normalized)
+        if not canonical_field:
+            suffix_matches = [
+                field for token, field in parent_canonicals.items()
+                if token and token in normalized and normalized.endswith(token)
+            ]
+            if len(suffix_matches) == 1:
+                canonical_field = suffix_matches[0]
 
         # Fields that must never receive a value on parent-company models.
         invalid_for_parent = set(PARENT_INVALID_FIELDS.get(model_class, ()))
@@ -914,6 +927,11 @@ def _parse_table_data_to_model_data(
         final_field = canonical_field or field_name
         if final_field and final_field in invalid_for_parent:
             final_field = None
+
+        if not final_field:
+            db_logger.debug(
+                "解析跳过未识别项目行: %s", item_name
+            )
 
         # 解析数值
         if final_field and value_str:
