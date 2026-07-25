@@ -9,7 +9,6 @@ import fitz  # PyMuPDF
 
 from src.tools.chapter_extractor import PDFChapterExtractor
 from src.db.db_connector import get_db
-from src.db.models import ReportPeriod
 from src.db.db_connector import save_tables_to_db
 from src.utils.logger import main_logger
 
