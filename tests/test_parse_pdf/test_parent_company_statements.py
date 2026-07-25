@@ -68,6 +68,12 @@ class _FakeConnector:
         self.created.append((table_name, kwargs))
         return 1
 
+    def filter_records(self, table_name, **kwargs):
+        return []
+
+    def update_record(self, table_name, record_id, **kwargs):
+        return True
+
 
 def _fake_table(table_data, unit="元"):
     return TableWithHeader(
