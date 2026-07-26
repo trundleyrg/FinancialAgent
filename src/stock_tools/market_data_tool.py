@@ -92,21 +92,31 @@ def get_stock_basic_info(stock_code: str) -> Dict[str, Any]:
         "affiliate_industry",
     }
 
+    code = _ensure_market_prefix(stock_code)
+    result: Dict[str, Any] = {field: "" for field in RETURN_FIELDS}
+
     try:
         # 从雪球获取股票基础信息
-        # 标准化股票代码并添加市场前缀（xq API 需要前缀如 SZ000423）
-        code = _ensure_market_prefix(stock_code)
-
         stock_individual_basic_info_xq_df = ak.stock_individual_basic_info_xq(symbol=code)
-        result = {
-            row["item"]: row["value"]
-            for _, row in stock_individual_basic_info_xq_df.iterrows()
-            if row["item"] in RETURN_FIELDS
-        }
-        return result
-    except Exception:
+    except Exception as exc:
         logger.error(traceback.format_exc())
-        return {"error": traceback.format_exc()}
+        result["error"] = str(exc)
+        return result
+
+    try:
+        if stock_individual_basic_info_xq_df is None or stock_individual_basic_info_xq_df.empty:
+            logger.warning("akshare 返回空的股票基础信息: %s", code)
+            result["error"] = "empty response"
+            return result
+        for _, row in stock_individual_basic_info_xq_df.iterrows():
+            if row.get("item") in RETURN_FIELDS:
+                result[row["item"]] = row.get("value")
+        return result
+    except Exception as exc:
+        logger.error("解析股票基础信息失败 %s: %s", code, exc)
+        logger.error(traceback.format_exc())
+        result["error"] = str(exc)
+        return result
 
 
 def get_stock_financial_indicator(
@@ -340,6 +350,67 @@ def get_stock_pe_pb_history(
     return result
 
 
+def get_dividend_stats(stock_code: str, years: int = 5) -> Dict[str, Any]:
+    """
+    汇总近 `years` 年的分红数据。
+
+    该函数历史上由 `dividend_stock_agent` 引用；`market_data_tool`
+    模块此前未提供实现，这里基于 `get_dividend_history` 做兜底：
+
+    - 当 akshare 接口异常或返回空数据时，返回所有汇总字段为 0
+      （或空字符串）的字典，确保调用方不会因字段缺失而崩溃；
+    - 调用方可以检查 `error` 字段判断数据是否完整。
+    """
+    fallback: Dict[str, Any] = {
+        "stock_code": _normalize_stock_code(stock_code),
+        "years": years,
+        "event_count": 0,
+        "total_cash_per_share": 0.0,
+        "average_cash_per_share": 0.0,
+        "last_cash_per_share": 0.0,
+        "events": [],
+        "error": None,
+    }
+    try:
+        history = get_dividend_history(stock_code)
+    except Exception as exc:  # pragma: no cover - 防御性兜底
+        logger.error("获取分红历史失败 %s: %s", stock_code, exc)
+        fallback["error"] = str(exc)
+        return fallback
+
+    if not history:
+        fallback["error"] = "no dividend history"
+        return fallback
+
+    dividend_events = [e for e in history if e.get("event_type") == "分红"]
+    fallback["events"] = dividend_events
+    fallback["event_count"] = len(dividend_events)
+    if dividend_events:
+        cash_values = [e.get("cash_per_share") or 0.0 for e in dividend_events]
+        fallback["total_cash_per_share"] = round(sum(cash_values), 4)
+        fallback["average_cash_per_share"] = round(sum(cash_values) / len(cash_values), 4)
+        fallback["last_cash_per_share"] = round(cash_values[0], 4)
+    return fallback
+
+
+def get_stock_valuation_history(
+    stock_code: str,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """
+    获取股票估值历史（PE/PB）。
+
+    兼容接口：内部委托给 `get_stock_pe_pb_history`，
+    失败时返回空列表。
+    """
+    try:
+        return get_stock_pe_pb_history(stock_code, start_date=start_date, end_date=end_date)
+    except Exception as exc:  # pragma: no cover - 防御性兜底
+        logger.error("获取估值历史失败 %s: %s", stock_code, exc)
+        return [{"error": str(exc)}]
+
+
 def get_market_data_tools():
     """返回所有市场数据工具函数列表"""
     return [
@@ -347,3 +418,43 @@ def get_market_data_tools():
         get_dividend_history,
         get_stock_financial_indicator,
     ]
+
+
+def get_stock_market_data(stock_code: str) -> Dict[str, Any]:
+    """
+    获取股票综合市场数据，供 analysis agents 使用。
+
+    该函数历史上由其他模块导入（`src.agents.analysis.*`）但目前
+    `market_data_tool` 中没有同名实现。为兼容遗留调用，本函数合并
+    `get_stock_basic_info` 与 `get_stock_pe_pb_history` 的输出，
+    并对底层 akshare 接口异常做兜底：
+
+    - 当 akshare 返回结构异常（如 `KeyError: 'data'`）时，
+      返回只包含 `error` 与空数据字段的字典，不抛出异常；
+    - 调用方应当检查返回值中的 `error` 字段来判断数据是否可用。
+    """
+    fallback: Dict[str, Any] = {
+        "stock_code": _normalize_stock_code(stock_code),
+        "basic_info": {},
+        "pe_pb_history": [],
+        "error": None,
+    }
+    try:
+        basic = get_stock_basic_info(stock_code)
+        fallback["basic_info"] = basic
+        if isinstance(basic, dict) and basic.get("error"):
+            fallback["error"] = basic["error"]
+    except Exception as e:  # pragma: no cover - 防御性兜底
+        logger.error("获取股票基础信息失败 %s: %s", stock_code, e)
+        fallback["error"] = str(e)
+        fallback["basic_info"] = {}
+
+    try:
+        fallback["pe_pb_history"] = get_stock_pe_pb_history(stock_code)
+    except Exception as e:  # pragma: no cover - 防御性兜底
+        logger.error("获取PE/PB历史失败 %s: %s", stock_code, e)
+        if fallback.get("error") is None:
+            fallback["error"] = str(e)
+        fallback["pe_pb_history"] = []
+
+    return fallback

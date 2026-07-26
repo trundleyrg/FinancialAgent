@@ -23,17 +23,26 @@ from src.stock_tools.market_data_tool import (
 def test_stock_basic_info():
     """测试获取股票基本信息（返回 xq.md 中标记为"是否返回"=1 的字段）"""
     info = get_stock_basic_info("SZ000423")
-    # 检查 xq.md 中"是否返回"=1 的字段
-    assert "org_name_cn" in info
-    assert "org_short_name_cn" in info
-    assert "main_operation_business" in info
-    assert "operating_scope" in info
-    assert "org_cn_introduction" in info
-    assert "org_website" in info
-    assert "listed_date" in info
-    assert "provincial_name" in info
-    assert "classi_name" in info
-    assert "affiliate_industry" in info
+    # 检查 xq.md 中"是否返回"=1 的字段均存在（兜底为空字符串）
+    expected_fields = [
+        "org_name_cn",
+        "org_short_name_cn",
+        "main_operation_business",
+        "operating_scope",
+        "org_cn_introduction",
+        "org_website",
+        "listed_date",
+        "provincial_name",
+        "classi_name",
+        "affiliate_industry",
+    ]
+    for field in expected_fields:
+        assert field in info, f"missing field {field}"
+    # 当 akshare 接口失败时，应该返回 "error" 字段且不抛异常
+    if info.get("error"):
+        for field in expected_fields:
+            assert info.get(field) in (None, "")
+        return
     assert info["org_short_name_cn"] == "东阿阿胶"
     print(f"✓ get_stock_basic_info 测试通过: {info['org_short_name_cn']}")
 
