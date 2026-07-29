@@ -4,6 +4,15 @@ from typing import Any, Dict, List, Tuple
 import pytest
 
 
+def _get(obj: Any, key: str) -> Any:
+    """兼容 dict 与带 __dict__ 的对象（FakeModel）。"""
+    if isinstance(obj, dict):
+        return obj.get(key)
+    if hasattr(obj, "__dict__"):
+        return obj.__dict__.get(key)
+    return None
+
+
 class FakeConnector:
     """进程内 DatabaseConnector 替身。仅实现 repo 实际调用的方法。
 
@@ -16,7 +25,10 @@ class FakeConnector:
 
     # ----- 测试辅助 -----
     def seed(self, table_name: str, rows: List[Dict[str, Any]]) -> None:
-        self.data[table_name] = [dict(r) for r in rows]
+        # dict 走拷贝路径；非 dict（如 FakeModel）原样保存以便后续测试 __dict__ 分支
+        self.data[table_name] = [
+            dict(r) if isinstance(r, dict) else r for r in rows
+        ]
 
     # ----- DatabaseConnector 表面 -----
     def filter_records(self, table_name: str, **kwargs: Any) -> List[Dict[str, Any]]:
@@ -24,8 +36,8 @@ class FakeConnector:
         rows = self.data.get(table_name, [])
         out: List[Dict[str, Any]] = []
         for r in rows:
-            if all(r.get(k) == v for k, v in kwargs.items()):
-                out.append(dict(r))
+            if all(_get(r, k) == v for k, v in kwargs.items()):
+                out.append(dict(r) if isinstance(r, dict) else r)
         return out
 
     def get_all_companies(self) -> List[Dict[str, Any]]:
