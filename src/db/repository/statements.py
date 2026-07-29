@@ -4,13 +4,16 @@
 新增 task（Task 7）追加 StatementRepository 类。
 """
 from dataclasses import dataclass
-from typing import Dict, Tuple, Type
+from typing import Any, Dict, Optional, Tuple, Type
 
+from src.db.db_connector import DatabaseConnector
 from src.db.models import (
     ConsolidatedBalanceSheet, ParentCompanyBalanceSheet,
     ConsolidatedIncomeStatement, ParentCompanyIncomeStatement,
     ConsolidatedCashFlowStatement, ParentCompanyCashFlowStatement,
 )
+from src.db.repository.base import BaseRepository
+from src.db.repository.keys import ReportKey
 from src.utils.logger import db_logger
 
 
@@ -78,3 +81,64 @@ def unregister_statement(table_name: str) -> None:
 def list_statements() -> Tuple[str, ...]:
     """当前注册的全部报表 table_name。"""
     return tuple(_STATEMENT_REGISTRY.keys())
+
+
+class StatementRepository(BaseRepository):
+    """全部注册报表的统一查询。运行时集合由 _STATEMENT_REGISTRY 决定。"""
+
+    @property
+    def statements(self) -> Tuple[str, ...]:
+        return list_statements()
+
+    def by_scope(self, scope: str) -> Tuple[str, ...]:
+        return tuple(
+            n for n, s in _STATEMENT_REGISTRY.items() if s.scope == scope
+        )
+
+    def by_kind(self, kind: str) -> Tuple[str, ...]:
+        return tuple(
+            n for n, s in _STATEMENT_REGISTRY.items() if s.kind == kind
+        )
+
+    def get_spec(self, table_name: str) -> Optional[StatementSpec]:
+        return _STATEMENT_REGISTRY.get(table_name)
+
+    def get_statement(
+        self, key: ReportKey, statement: str,
+    ) -> Optional[Dict[str, Any]]:
+        if statement not in _STATEMENT_REGISTRY:
+            raise ValueError(
+                f"未知 statement: {statement}; 可用: {list(_STATEMENT_REGISTRY)}"
+            )
+        return self._query_first(statement, key)
+
+    def get_all_statements(
+        self, key: ReportKey,
+    ) -> Dict[str, Optional[Dict[str, Any]]]:
+        return {stmt: self.get_statement(key, stmt) for stmt in self.statements}
+
+    def get_multi_year_statement(
+        self, key: ReportKey, statement: str,
+        start_year: int, end_year: int,
+    ) -> Dict[int, Dict[str, Any]]:
+        if statement not in _STATEMENT_REGISTRY:
+            raise ValueError(f"未知 statement: {statement}")
+        out: Dict[int, Dict[str, Any]] = {}
+        for y in range(start_year, end_year + 1):
+            d = self.get_statement(key.with_year(y), statement)
+            if d is not None:
+                out[y] = d
+        return out
+
+    def get_multi_year_all_statements(
+        self, key: ReportKey,
+        start_year: int, end_year: int,
+    ) -> Dict[int, Dict[str, Dict[str, Any]]]:
+        out: Dict[int, Dict[str, Dict[str, Any]]] = {}
+        for y in range(start_year, end_year + 1):
+            year_key = key.with_year(y)
+            stmts = self.get_all_statements(year_key)
+            if any(stmts.values()):
+                out[y] = stmts
+        return out
+
