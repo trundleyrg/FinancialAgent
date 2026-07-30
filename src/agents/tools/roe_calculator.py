@@ -150,7 +150,7 @@ def calculate_roe_from_db(
     从数据库查询数据并计算ROE
 
     Args:
-        db_connector: 数据库连接器
+        db_connector: 数据库连接器（用于构造 StatementRepository）
         company_name: 公司名称
         stock_code: 股票代码
         report_year: 报告年份
@@ -160,26 +160,20 @@ def calculate_roe_from_db(
     Returns:
         ROE计算结果字典
     """
+    from src.db import ReportKey, StatementRepository
+
     try:
-        # 查询本期利润表
-        income_records = db_connector.filter_records(
-            "consolidated_income_statement",
-            company_name=company_name,
-            stock_code=stock_code,
-            report_year=report_year,
-            report_period=report_period
-        )
+        stmt_repo = StatementRepository(db_connector)
 
-        # 查询本期资产负债表
-        balance_records = db_connector.filter_records(
-            "consolidated_balance_sheet",
-            company_name=company_name,
-            stock_code=stock_code,
-            report_year=report_year,
-            report_period=report_period
+        # 查询本期利润表 + 资产负债表（走 repo，返回纯 dict）
+        cur_key = ReportKey(
+            stock_code=stock_code, company_name=company_name,
+            year=report_year, period=report_period,
         )
+        income_data = stmt_repo.get_statement(cur_key, "consolidated_income_statement")
+        balance_data = stmt_repo.get_statement(cur_key, "consolidated_balance_sheet")
 
-        if not income_records or not balance_records:
+        if not income_data or not balance_data:
             logger.warning(f"未找到 {company_name} {report_year}{report_period} 的财报数据")
             return {
                 "roe": 0.0,
@@ -189,22 +183,6 @@ def calculate_roe_from_db(
                 "is_valid": False
             }
 
-        # 转换记录为字典
-        income_record = income_records[0]
-        balance_record = balance_records[0]
-
-        if hasattr(income_record, '__dict__'):
-            income_data = income_record.__dict__
-            balance_data = balance_record.__dict__
-        else:
-            income_data = dict(income_record)
-            balance_data = dict(balance_record)
-
-        # 移除Peewee内部字段
-        for key in ['_database', '_dirty', 'id', '_state']:
-            income_data.pop(key, None)
-            balance_data.pop(key, None)
-
         # 如果使用加权平均法，查询上期数据
         previous_income_data = None
         previous_balance_data = None
@@ -212,59 +190,24 @@ def calculate_roe_from_db(
         if use_average:
             # 计算上一个报告期
             if report_period == "FY":
-                # 年报需要上年同期数据
-                prev_year = report_year - 1
-                prev_period = "FY"
+                prev_year, prev_period = report_year - 1, "FY"
             elif report_period == "Q1":
-                # 一季报需要上年年报
-                prev_year = report_year - 1
-                prev_period = "FY"
+                prev_year, prev_period = report_year - 1, "FY"
             elif report_period == "H1":
-                # 半年报需要上年同期半年报
-                prev_year = report_year - 1
-                prev_period = "H1"
+                prev_year, prev_period = report_year - 1, "H1"
             elif report_period == "Q3":
-                # 三季报需要上年同期三季报
-                prev_year = report_year - 1
-                prev_period = "Q3"
+                prev_year, prev_period = report_year - 1, "Q3"
             else:
-                prev_year = report_year - 1
-                prev_period = "FY"
+                prev_year, prev_period = report_year - 1, "FY"
 
-            # 查询上期利润表
-            prev_income_records = db_connector.filter_records(
-                "consolidated_income_statement",
-                company_name=company_name,
-                stock_code=stock_code,
-                report_year=prev_year,
-                report_period=prev_period
+            prev_key = ReportKey(
+                stock_code=stock_code, company_name=company_name,
+                year=prev_year, period=prev_period,
             )
+            previous_income_data = stmt_repo.get_statement(prev_key, "consolidated_income_statement")
+            previous_balance_data = stmt_repo.get_statement(prev_key, "consolidated_balance_sheet")
 
-            # 查询上期资产负债表
-            prev_balance_records = db_connector.filter_records(
-                "consolidated_balance_sheet",
-                company_name=company_name,
-                stock_code=stock_code,
-                report_year=prev_year,
-                report_period=prev_period
-            )
-
-            if prev_income_records and prev_balance_records:
-                prev_income = prev_income_records[0]
-                prev_balance = prev_balance_records[0]
-
-                if hasattr(prev_income, '__dict__'):
-                    previous_income_data = prev_income.__dict__
-                    previous_balance_data = prev_balance.__dict__
-                else:
-                    previous_income_data = dict(prev_income)
-                    previous_balance_data = dict(prev_balance)
-
-                for key in ['_database', '_dirty', 'id', '_state']:
-                    previous_income_data.pop(key, None)
-                    previous_balance_data.pop(key, None)
-
-        # 计算ROE
+        # 计算ROE（calculate_roe 内部已处理 None 输入）
         return calculate_roe(
             income_statement=income_data,
             balance_sheet=balance_data,
