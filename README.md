@@ -30,7 +30,14 @@ FinancialAgent/
 │   │   ├── __init__.py
 │   │   ├── db_connector.py   # 数据库操作逻辑 (Peewee ORM)
 │   │   ├── models.py         # Pydantic 数据验证模型
-│   │   └── table_models.py   # Peewee 数据库表模型
+│   │   ├── table_models.py   # Peewee 数据库表模型
+│   │   └── repository/       # 查询层（项目唯一的读入口）
+│   │       ├── keys.py       # ReportKey
+│   │       ├── base.py       # BaseRepository + _ModelToDict
+│   │       ├── reports.py    # ReportRepository
+│   │       ├── statements.py # StatementRepository + 注册表
+│   │       ├── metrics.py    # MetricRepository
+│   │       └── share_structure.py # ShareStructureRepository
 │   ├── script/
 │   │   ├── init_duckdb.py     # DuckDB 数据库初始化脚本
 │   │   ├── init_postgresql_db.py  # PostgreSQL 数据库初始化脚本
@@ -58,3 +65,33 @@ FinancialAgent/
 ├── pyproject.toml            # Poetry 依赖管理配置
 └── poetry.lock               # Poetry 锁定文件
 ```
+
+## 数据库查询层
+
+项目在 `src/db/db_connector.py`（CRUD/DDL/PDF-parse/Excel）之上构建了一套**统一的查询层** `src/db/repository/`，作为项目唯一的读入口：
+
+- **唯一读入口**：所有读路径必须走 repository，禁止直连 `db_connector.filter_records`
+- **纯 dict 返回**：消除 Peewee Model / dict 双轨
+- **`ReportKey` 寻址**：`stock_code` / `company_name` / `year` / `period` 一处贯通
+- **缺失数据保持缺失**：跨年/跨期查询中缺失年份不抛错、不填充
+- **注册表扩展**：新增报表只需 `register_statement(StatementSpec(...))`，无需改 repo 方法
+
+使用示例：
+
+```python
+from src.db import ReportKey, StatementRepository
+from src.db.db_connector import get_db
+
+db = get_db()
+repo = StatementRepository(db)
+rows = repo.get_multi_year_statement(
+    ReportKey(stock_code="000423", period="FY"),
+    "consolidated_balance_sheet",
+    start_year=2020, end_year=2024,
+)
+# rows 是 {year: dict}；缺失年份键缺失
+```
+
+消费方已迁移：`src/agents/tools/db_tools.py` / `ui/backend/services/db_service.py` / `src/agents/tools/roe_calculator.py` / `src/tools/pdf_db_comparator.py` / `script/verify_parent_company.py` 全部改走 repository。
+
+新增报表的扩展步骤详见 [`docs/添加新报表指南.md`](docs/添加新报表指南.md)。

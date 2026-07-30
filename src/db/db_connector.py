@@ -551,9 +551,9 @@ class DatabaseConnector:
         """获取指定公司的所有报告年份"""
         if self.database_type == "duckdb":
             sql = """
-                SELECT DISTINCT report_year 
-                FROM financial_reports 
-                WHERE stock_code = ? 
+                SELECT DISTINCT report_year
+                FROM financial_reports
+                WHERE stock_code = ?
                 ORDER BY report_year DESC
             """
             results = self._duckdb_conn.execute(sql, [stock_code]).fetchall()
@@ -562,6 +562,23 @@ class DatabaseConnector:
             result = (FinancialReport
                       .select(FinancialReport.report_year)
                       .where(FinancialReport.stock_code == stock_code)
+                      .distinct()
+                      .order_by(FinancialReport.report_year.desc()))
+            return [row.report_year for row in result]
+
+    def get_all_report_years(self) -> List[int]:
+        """获取所有公司全部报告年份（去重，按年份倒序）。"""
+        if self.database_type == "duckdb":
+            sql = (
+                "SELECT DISTINCT report_year "
+                "FROM financial_reports "
+                "ORDER BY report_year DESC"
+            )
+            results = self._duckdb_conn.execute(sql).fetchall()
+            return [row[0] for row in results]
+        else:
+            result = (FinancialReport
+                      .select(FinancialReport.report_year)
                       .distinct()
                       .order_by(FinancialReport.report_year.desc()))
             return [row.report_year for row in result]

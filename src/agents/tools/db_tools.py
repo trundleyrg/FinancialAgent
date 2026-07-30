@@ -1,293 +1,179 @@
-"""
-数据库查询工具
+"""数据库查询工具（薄适配层）。
 
-提供从数据库获取财务数据的工具函数
+LLM 工具签名保持向后兼容；内部全部走 StatementRepository / ReportRepository。
 """
-from typing import Optional, Dict, Any, List
+import datetime
 import logging
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger("Agent.DB")
 
-# 延迟导入，避免循环依赖
-_db_connector = None
+# 短别名 → 规范名（仅这 6 张有别名；新报表按规范名调 repo）
+_STATEMENT_ALIASES = {
+    "balance_sheet":            "consolidated_balance_sheet",
+    "parent_balance_sheet":     "parent_company_balance_sheet",
+    "income_statement":         "consolidated_income_statement",
+    "parent_income_statement":  "parent_company_income_statement",
+    "cash_flow":                "consolidated_cash_flow_statement",
+    "parent_cash_flow":         "parent_company_cash_flow_statement",
+}
+
+_db = None
+_stmt_repo = None
+_report_repo = None
 
 
-def _get_db_connector():
-    """延迟获取数据库连接器"""
-    global _db_connector
-    if _db_connector is None:
+def _get_repos():
+    """延迟初始化：首次调用时建 connector + repo。"""
+    global _db, _stmt_repo, _report_repo
+    if _db is None:
         from src.db.db_connector import get_db
-        _db_connector = get_db()
-    return _db_connector
+        from src.db import StatementRepository, ReportRepository
+
+        _db = get_db()
+        _stmt_repo = StatementRepository(_db)
+        _report_repo = ReportRepository(_db)
+    return _stmt_repo, _report_repo
+
+
+def _resolve_statement(name: str) -> str:
+    """接受规范名或短别名；都返回规范名。"""
+    from src.db.repository.statements import list_statements
+    if name in list_statements():
+        return name
+    if name in _STATEMENT_ALIASES:
+        return _STATEMENT_ALIASES[name]
+    raise ValueError(f"未知 statement: {name}")
+
+
+def _key(
+    stock_code: Optional[str] = None,
+    company_name: Optional[str] = None,
+    year: Optional[int] = None,
+    period: Optional[str] = None,
+):
+    """轻量本地构造 ReportKey，避免循环导入。"""
+    from src.db import ReportKey
+    return ReportKey(
+        stock_code=stock_code, company_name=company_name,
+        year=year, period=period,
+    )
+
+
+def _get_statement(
+    company_name: str, year: int, period: str, default_table: str,
+) -> Dict[str, Any]:
+    """三个 get_*_statement 共用的查询逻辑。"""
+    stmts, _ = _get_repos()
+    out = stmts.get_statement(
+        _key(company_name=company_name, year=year, period=period),
+        _resolve_statement(default_table),
+    )
+    return out if out is not None else {}
 
 
 def get_balance_sheet(
-    company_name: str,
-    year: int,
-    period: str,
-    table_name: str = "consolidated_balance_sheet"
+    company_name: str, year: int, period: str,
+    table_name: str = "consolidated_balance_sheet",
 ) -> Dict[str, Any]:
-    """
-    获取资产负债表数据
-
-    Args:
-        company_name: 公司名称
-        year: 报告年份
-        period: 报告周期 (Q1/H1/Q3/FY)
-        table_name: 表名，默认合并资产负债表
-
-    Returns:
-        资产负债表数据字典
-    """
+    """获取资产负债表数据。"""
     try:
-        db = _get_db_connector()
-        records = db.filter_records(
-            table_name,
-            company_name=company_name,
-            report_year=year,
-            report_period=period
-        )
-        if records:
-            return records[0]
-        logger.warning(f"未找到资产负债表数据: {company_name} {year} {period}")
-        return {}
+        return _get_statement(company_name, year, period, table_name)
     except Exception as e:
         logger.error(f"获取资产负债表失败: {e}")
         return {}
 
 
 def get_income_statement(
-    company_name: str,
-    year: int,
-    period: str,
-    table_name: str = "consolidated_income_statement"
+    company_name: str, year: int, period: str,
+    table_name: str = "consolidated_income_statement",
 ) -> Dict[str, Any]:
-    """
-    获取利润表数据
-
-    Args:
-        company_name: 公司名称
-        year: 报告年份
-        period: 报告周期
-        table_name: 表名，默认合并利润表
-
-    Returns:
-        利润表数据字典
-    """
+    """获取利润表数据。"""
     try:
-        db = _get_db_connector()
-        records = db.filter_records(
-            table_name,
-            company_name=company_name,
-            report_year=year,
-            report_period=period
-        )
-        if records:
-            return records[0]
-        logger.warning(f"未找到利润表数据: {company_name} {year} {period}")
-        return {}
+        return _get_statement(company_name, year, period, table_name)
     except Exception as e:
         logger.error(f"获取利润表失败: {e}")
         return {}
 
 
 def get_cash_flow(
-    company_name: str,
-    year: int,
-    period: str,
-    table_name: str = "consolidated_cash_flow_statement"
+    company_name: str, year: int, period: str,
+    table_name: str = "consolidated_cash_flow_statement",
 ) -> Dict[str, Any]:
-    """
-    获取现金流量表数据
-
-    Args:
-        company_name: 公司名称
-        year: 报告年份
-        period: 报告周期
-        table_name: 表名，默认合并现金流量表
-
-    Returns:
-        现金流量表数据字典
-    """
+    """获取现金流量表数据。"""
     try:
-        db = _get_db_connector()
-        records = db.filter_records(
-            table_name,
-            company_name=company_name,
-            report_year=year,
-            report_period=period
-        )
-        if records:
-            return records[0]
-        logger.warning(f"未找到现金流量表数据: {company_name} {year} {period}")
-        return {}
+        return _get_statement(company_name, year, period, table_name)
     except Exception as e:
         logger.error(f"获取现金流量表失败: {e}")
         return {}
 
 
 def get_all_financial_data(
-    company_name: str,
-    year: int,
-    period: str
+    company_name: str, year: int, period: str,
 ) -> Dict[str, Any]:
-    """
-    获取所有财务表数据
-
-    Args:
-        company_name: 公司名称
-        year: 报告年份
-        period: 报告周期
-
-    Returns:
-        包含所有财务表的字典
-    """
+    """获取 3 张合并表（向后兼容的旧形状）。"""
+    stmts, _ = _get_repos()
+    key = _key(company_name=company_name, year=year, period=period)
     return {
-        "balance_sheet": get_balance_sheet(company_name, year, period),
-        "income_statement": get_income_statement(company_name, year, period),
-        "cash_flow": get_cash_flow(company_name, year, period)
+        "balance_sheet":    stmts.get_statement(key, "consolidated_balance_sheet"),
+        "income_statement": stmts.get_statement(key, "consolidated_income_statement"),
+        "cash_flow":        stmts.get_statement(key, "consolidated_cash_flow_statement"),
     }
 
 
 def get_multi_year_financial_data(
-    company_name: str,
-    start_year: int,
-    end_year: int,
-    period: str = "FY"
+    company_name: str, start_year: int, end_year: int, period: str = "FY",
 ) -> Dict[str, Any]:
+    """获取多年财务数据（旧形状：{year_str: {3 张合并表}}）。
+
+    缺失年份键缺失 — 不抛错。
     """
-    获取多年财务数据，用于同比增长率等跨期计算
-
-    Args:
-        company_name: 公司名称
-        start_year:   起始年份（含）
-        end_year:     结束年份（含）
-        period:       报告周期，默认年报 FY
-
-    Returns:
-        以年份字符串为键的嵌套字典，例如：
-        {
-            "2023": {"balance_sheet": {...}, "income_statement": {...}, "cash_flow": {...}},
-            "2024": {...}
+    stmts, _ = _get_repos()
+    key = _key(company_name=company_name, period=period)
+    multi = stmts.get_multi_year_all_statements(key, start_year, end_year)
+    return {
+        str(y): {
+            k: multi[y].get(k) for k in (
+                "consolidated_balance_sheet",
+                "consolidated_income_statement",
+                "consolidated_cash_flow_statement",
+            )
         }
-    """
-    result: Dict[str, Any] = {}
-    for year in range(start_year, end_year + 1):
-        data = get_all_financial_data(company_name, year, period)
-        # 仅在至少有一张非空报表时才写入
-        if any(data.values()):
-            result[str(year)] = data
+        for y in sorted(multi)
+    }
+
+
+def check_company_data_availability(
+    company_name: str, stock_code: Optional[str] = None, years: int = 10,
+) -> Dict[str, Any]:
+    """检查公司在数据库中是否存在近 N 年的数据。"""
+    _, report_repo = _get_repos()
+    try:
+        if stock_code:
+            key = _key(stock_code=stock_code)
         else:
-            logger.warning(f"无数据: {company_name} {year} {period}")
-    return result
+            key = _key(company_name=company_name)
+        return report_repo.check_data_availability(key, years=years)
+    except Exception as e:
+        logger.error(f"检查数据可用性失败: {e}")
+        current_year = datetime.datetime.now().year
+        return {
+            "has_data": False,
+            "available_years": [],
+            "missing_years": list(range(current_year - years + 1, current_year + 1)),
+            "data_coverage": 0.0,
+            "has_latest_year": False,
+            "error": str(e),
+        }
 
 
 def get_db_tools() -> List[callable]:
-    """
-    获取所有数据库工具
-
-    Returns:
-        工具函数列表
-    """
+    """获取所有数据库工具（LLM 工具列表）。"""
     return [
         get_balance_sheet,
         get_income_statement,
         get_cash_flow,
         get_all_financial_data,
         get_multi_year_financial_data,
-        check_company_data_availability
+        check_company_data_availability,
     ]
-
-
-def check_company_data_availability(
-    company_name: str,
-    stock_code: Optional[str] = None,
-    years: int = 10
-) -> Dict[str, Any]:
-    """
-    检查公司在数据库中是否存在近 N 年的数据
-
-    Args:
-        company_name: 公司名称
-        stock_code: 股票代码（可选）
-        years: 检查的年份数量，默认 10 年
-
-    Returns:
-        包含检查结果的字典：
-        {
-            "has_data": bool,           # 是否有足够数据
-            "available_years": List[int],  # 可用的年份列表
-            "missing_years": List[int],    # 缺失的年份列表
-            "data_coverage": float,         # 数据覆盖率 (0-1)
-            "has_latest_year": bool         # 是否有最新年份数据
-        }
-    """
-    import datetime
-
-    try:
-        db = _get_db_connector()
-        current_year = datetime.datetime.now().year
-
-        # 需要检查的年份范围（近 N 年）
-        required_years = list(range(current_year - years + 1, current_year + 1))
-
-        # 查询该公司所有可用的年份
-        # 使用 FinancialReport 表查询可用年份
-        try:
-            from src.db.models import FinancialReport
-            query = FinancialReport.select(FinancialReport.report_year).distinct()
-
-            if stock_code:
-                query = query.where(FinancialReport.stock_code == stock_code)
-            else:
-                query = query.where(FinancialReport.company_name == company_name)
-
-            available_years = [record.report_year for record in query]
-            available_years = list(set(available_years))
-
-        except Exception as e:
-            logger.warning(f"查询可用年份失败，使用 filter_records 方式: {e}")
-            # 备用方式：直接查询
-            records = db.filter_records(
-                "financial_reports",
-                company_name=company_name,
-                stock_code=stock_code
-            ) if stock_code else db.filter_records(
-                "financial_reports",
-                company_name=company_name
-            )
-            available_years = list(set([r.get("report_year") for r in records if r.get("report_year")]))
-
-        # 计算缺失年份
-        missing_years = [y for y in required_years if y not in available_years]
-
-        # 数据覆盖率
-        data_coverage = len(available_years) / years if years > 0 else 0
-
-        # 是否有最新年份数据
-        has_latest_year = current_year in available_years
-
-        result = {
-            "has_data": len(available_years) >= years * 0.5,  # 至少 50% 数据认为有足够数据
-            "available_years": sorted(available_years),
-            "missing_years": sorted(missing_years),
-            "data_coverage": round(data_coverage, 2),
-            "has_latest_year": has_latest_year,
-            "required_years": required_years,
-            "total_available": len(available_years)
-        }
-
-        logger.info(f"数据可用性检查: {company_name}, 可用 {len(available_years)}/{years} 年, 覆盖率 {result['data_coverage']:.0%}")
-
-        return result
-
-    except Exception as e:
-        logger.error(f"检查数据可用性失败: {e}")
-        return {
-            "has_data": False,
-            "available_years": [],
-            "missing_years": list(range(datetime.datetime.now().year - years + 1, datetime.datetime.now().year + 1)),
-            "data_coverage": 0.0,
-            "has_latest_year": False,
-            "error": str(e)
-        }

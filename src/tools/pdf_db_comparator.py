@@ -28,39 +28,41 @@ from src.tools.chapter_extractor import PDFChapterExtractor
 
 
 def get_db_data(read_only=True):
-    """获取 DuckDB 中的财务数据"""
-    db_path = './data/db/financial_data.duckdb'
-    conn = duckdb.connect(db_path, read_only=read_only)
+    """获取 DuckDB 中的财务数据。
 
-    # 查询合并资产负债表
-    balance_sheet = conn.execute("""
-        SELECT id, stock_code, report_year, report_period,
-               monetary_funds, total_assets, total_liabilities, total_owners_equity,
-               accounts_receivable, inventory, fixed_assets
-        FROM consolidated_balance_sheet
-        WHERE stock_code = '' OR stock_code IS NULL
-        ORDER BY report_year
-    """).df()
+    走 StatementRepository 拿到纯 dict，再转 pandas DataFrame。
+    占位行（stock_code 空 / NULL）由调用方按需过滤；这里返回全部行。
+    """
+    import pandas as pd
+    from src.db import StatementRepository
+    from src.db.db_connector import get_db
 
-    # 查询合并利润表
-    income_stmt = conn.execute("""
-        SELECT id, stock_code, report_year, report_period,
-               operating_revenue, operating_costs, operating_profit, net_profit
-        FROM consolidated_income_statement
-        WHERE stock_code = '' OR stock_code IS NULL
-        ORDER BY report_year
-    """).df()
+    db = get_db()
+    stmt_repo = StatementRepository(db)
 
-    # 查询合并现金流量表
-    cash_flow = conn.execute("""
-        SELECT id, stock_code, report_year, report_period,
-               net_cash_from_operations, net_cash_from_investing, net_cash_from_financing
-        FROM consolidated_cash_flow_statement
-        WHERE stock_code = '' OR stock_code IS NULL
-        ORDER BY report_year
-    """).df()
+    # 这里走的是"所有公司"的扫描而非单公司 ReportKey，因此直接 filter_records
+    balance_rows = db.filter_records("consolidated_balance_sheet")
+    income_rows = db.filter_records("consolidated_income_statement")
+    cash_flow_rows = db.filter_records("consolidated_cash_flow_statement")
 
-    conn.close()
+    bs_cols = ["monetary_funds", "total_assets", "total_liabilities",
+               "total_owners_equity", "accounts_receivable", "inventory",
+               "fixed_assets"]
+    is_cols = ["operating_revenue", "operating_costs", "operating_profit",
+               "net_profit"]
+    cf_cols = ["net_cash_from_operations", "net_cash_from_investing",
+               "net_cash_from_financing"]
+
+    def _project(rows, cols):
+        base = [{k: r.get(k) for k in
+                 ["stock_code", "report_year", "report_period"] + cols}
+                for r in rows]
+        return pd.DataFrame(base)
+
+    balance_sheet = _project(balance_rows, bs_cols).sort_values("report_year")
+    income_stmt = _project(income_rows, is_cols).sort_values("report_year")
+    cash_flow = _project(cash_flow_rows, cf_cols).sort_values("report_year")
+
     return balance_sheet, income_stmt, cash_flow
 
 
