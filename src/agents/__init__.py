@@ -1,20 +1,8 @@
-"""
-Agent 分析模块
+"""Agent 模块。
 
-包含各种分析 Agent：
-- 周期股分析 Agent
-- 红利股分析 Agent
-- 基本面分析 Agent
-- 总结 Agent
+注意：原 __init__.py 曾在此处 eager-import analysis 子模块中的 agent 构造器，
+但 analysis 内部依赖 src.graph.graph，而 graph 也从 src.agents.analysis import，
+触发循环导入。现改为 lazy：消费者直接
+`from src.agents.analysis.cyclical_stock_agent import create_cyclical_analysis`
+即可（目前唯一消费者 src/graph/graph.py 已用此方式）。
 """
-from .analysis.cyclical_stock_agent import create_cyclical_analysis
-from .analysis.dividend_stock_agent import create_dividend_analysis
-from .analysis.fundamental_agent import create_fundamental_analysis
-from .analysis.summary_agent import create_summary_agent
-
-__all__ = [
-    "create_cyclical_analysis",
-    "create_dividend_analysis",
-    "create_fundamental_analysis",
-    "create_summary_agent",
-]
