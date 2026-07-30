@@ -10,10 +10,8 @@ import json
 import os
 from pathlib import Path
 
-import duckdb
-
 from src.tools.chapter_extractor import PDFChapterExtractor
-from src.db.db_connector import _parse_table_data_to_model_data
+from src.db.db_connector import _parse_table_data_to_model_data, get_db
 from src.db.models import (
     ParentCompanyBalanceSheet,
     ParentCompanyIncomeStatement,
@@ -60,21 +58,16 @@ def _resolve_field(model_class, label: str):
     return None
 
 
-def _db_row(db_path: str, table_name: str, year: int):
-    con = duckdb.connect(db_path, read_only=True)
-    try:
-        cols = [r[0] for r in con.execute(f"describe {table_name}").fetchall()]
-        rows = con.execute(
-            f"select * from {table_name} where report_year = ?", [year]
-        ).fetchall()
-    finally:
-        con.close()
-    if not rows:
-        return None
-    return dict(zip(cols, rows[0]))
+def _db_row(db, table_name: str, year: int):
+    """走 db_connector.filter_records，按 report_year 取首条。
+
+    注意：原脚本未按 stock_code 过滤，保留这一行为。
+    """
+    rows = db.filter_records(table_name, report_year=year)
+    return rows[0] if rows else None
 
 
-def _compare_year(year: int, pdf_path: str, db_path: str):
+def _compare_year(year: int, pdf_path: str, db):
     extractor = PDFChapterExtractor(pdf_path)
     try:
         tables = extractor.extract_main_tables()
@@ -95,7 +88,7 @@ def _compare_year(year: int, pdf_path: str, db_path: str):
             }
             continue
 
-        db_row = _db_row(db_path, db_table, year) or {}
+        db_row = _db_row(db, db_table, year) or {}
         matched = mismatched = missing = unmatched = 0
         for idx in range(1, len(table_obj.table_data)):
             cells = table_obj.table_data[idx]
@@ -139,12 +132,12 @@ def _compare_year(year: int, pdf_path: str, db_path: str):
 
 
 def main():
-    db_path = os.environ.get("DUCKDB_DB_PATH", "./data/db/financial_data.duckdb")
+    db = get_db()
     pdf_dir = Path("data/000423")
     report = {"summary": {}, "differences": []}
     for pdf in sorted(pdf_dir.glob("*.pdf")):
         year = int(pdf.stem.split("_")[-1])
-        summary, diffs = _compare_year(year, str(pdf), db_path)
+        summary, diffs = _compare_year(year, str(pdf), db)
         report["summary"][year] = summary
         report["differences"].extend(diffs)
     out = Path("data/000423/parent_diff_report.json")
