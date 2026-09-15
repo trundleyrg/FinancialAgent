@@ -128,3 +128,44 @@ def test_upsert_many_idempotent_on_key(repo, fake_connector):
 
 def test_upsert_many_empty_list(repo):
     assert repo.upsert_many([]) == 0
+
+
+def test_aggregate_dividend_stats_computes_totals(repo, fake_connector):
+    fake_connector.seed("capital_change_events", [
+        {"company_name": "A", "stock_code": "000423",
+         "report_year": 2023, "report_period": "FY",
+         "event_type": "cash_dividend", "event_date": "2024-06-15",
+         "cash_per_10_shares": 11.6, "source": "eastmoney"},
+        {"company_name": "A", "stock_code": "000423",
+         "report_year": 2024, "report_period": "FY",
+         "event_type": "cash_dividend", "event_date": "2025-06-15",
+         "cash_per_10_shares": 13.2, "source": "eastmoney"},
+        {"company_name": "A", "stock_code": "000423",
+         "report_year": 2023, "report_period": "FY",
+         "event_type": "allotment", "event_date": "2024-08-01",
+         "allotment_price": 8.0, "source": "cninfo"},
+    ])
+    out = repo.aggregate_dividend_stats(ReportKey(stock_code="000423"), years=5)
+    assert out["event_count"] == 2
+    assert out["total_cash_per_10_shares"] == round(11.6 + 13.2, 4)
+    assert out["average_cash_per_10_shares"] == round((11.6 + 13.2) / 2, 4)
+    assert out["last_event_date"] == "2025-06-15"
+    assert out["last_cash_per_10_shares"] == 13.2
+
+
+def test_aggregate_dividend_stats_empty(repo):
+    out = repo.aggregate_dividend_stats(ReportKey(stock_code="000423"), years=5)
+    assert out["event_count"] == 0
+    assert out["total_cash_per_10_shares"] == 0.0
+    assert out["last_event_date"] is None
+
+
+def test_aggregate_dividend_stats_excludes_allotment(repo, fake_connector):
+    fake_connector.seed("capital_change_events", [
+        {"company_name": "A", "stock_code": "000423",
+         "report_year": 2023, "report_period": "FY",
+         "event_type": "allotment", "event_date": "2024-08-01",
+         "cash_per_10_shares": None, "allotment_price": 8.0, "source": "cninfo"},
+    ])
+    out = repo.aggregate_dividend_stats(ReportKey(stock_code="000423"), years=5)
+    assert out["event_count"] == 0
