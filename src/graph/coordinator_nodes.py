@@ -354,7 +354,9 @@ def fetch_capital_changes_node(state: FinancialState) -> FinancialState:
         return {"capital_changes_fetched": True, "capital_changes_count": existing}
 
     try:
-        events = fetch_capital_change_events(stock_code or company_name)
+        events = fetch_capital_change_events(
+            stock_code or company_name, company_name=company_name,
+        )
         count = repo.upsert_many(events)
         logger.info("股本变动事件拉取并入库 (%s): %d 条", stock_code, count)
         return {"capital_changes_fetched": True, "capital_changes_count": count}

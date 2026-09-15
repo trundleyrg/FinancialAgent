@@ -9,6 +9,7 @@
 import argparse
 import sys
 from pathlib import Path
+from typing import Optional
 
 project_root = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(project_root))
@@ -32,12 +33,26 @@ def _list_all_companies() -> list:
     return [{"stock_code": k[0], "company_name": k[1]} for k in seen]
 
 
-def _refresh_one(stock_code: str, dry_run: bool = False) -> int:
+def _company_name_from_db(stock_code: str) -> Optional[str]:
+    """Resolve company_name from financial_reports for a stock_code."""
+    db = get_db()
+    rows = db.filter_records("financial_reports", stock_code=stock_code)
+    if not rows:
+        return None
+    name = rows[0].get("company_name")
+    return name if name else None
+
+
+def _refresh_one(
+    stock_code: str,
+    dry_run: bool = False,
+    company_name: Optional[str] = None,
+) -> int:
     repo = CapitalChangeEventRepository(get_db())
     key = ReportKey(stock_code=stock_code)
     existing = repo.count_events(key)
     logger.info("[%s] 现有事件: %d 条", stock_code, existing)
-    events = fetch_capital_change_events(stock_code)
+    events = fetch_capital_change_events(stock_code, company_name=company_name)
     # fetcher 偶发产出含 "NaT" 字符串的事件（pandas NaT.isoformat() 漏洞）。
     # 把所有日期字段里的 "NaT" 字符串统一清洗为 None，避免 DuckDB insert 报错。
     date_fields = (
@@ -76,13 +91,24 @@ def main() -> int:
     group.add_argument("--stock-code", help="单股刷新，例如 000423")
     group.add_argument("--all", action="store_true", help="刷新库内全部公司")
     parser.add_argument("--dry-run", action="store_true", help="只打印不写库")
+    parser.add_argument(
+        "--company-name",
+        default=None,
+        help="可选：传入公司名称，否则按 stock_code 查库补齐",
+    )
     args = parser.parse_args()
 
     if args.stock_code:
-        _refresh_one(args.stock_code, dry_run=args.dry_run)
+        cn = args.company_name or _company_name_from_db(args.stock_code)
+        _refresh_one(
+            args.stock_code, dry_run=args.dry_run, company_name=cn,
+        )
     else:
         for c in _list_all_companies():
-            _refresh_one(c["stock_code"], dry_run=args.dry_run)
+            _refresh_one(
+                c["stock_code"], dry_run=args.dry_run,
+                company_name=c.get("company_name"),
+            )
     return 0
 
 

@@ -99,3 +99,44 @@ def test_fetch_combines_cash_and_bonus():
     assert events[0]["event_type"] == "combination"
     assert events[0]["cash_per_10_shares"] == 5.0
     assert events[0]["bonus_shares_per_10"] == 3.0
+
+
+def test_fetch_propagates_company_name_when_provided():
+    """Passing company_name=... should stamp it onto every emitted event."""
+    fx = {
+        "eastmoney_dividend": [
+            {"公告日期": "2022-06-15", "送股": 0.0, "转增": 0.0, "派息": 6.0,
+             "进度": "实施", "除权除息日": "2022-06-20", "股权登记日": "2022-06-19", "红股上市日": "2022-06-22"},
+            {"公告日期": "2023-06-15", "送股": 0.0, "转增": 0.0, "派息": 7.0,
+             "进度": "实施", "除权除息日": "2023-06-20", "股权登记日": "2023-06-19", "红股上市日": "2023-06-22"},
+        ],
+        "eastmoney_allotment": [],
+        "cninfo_dividend": [],
+        "cninfo_allotment": [],
+    }
+    with _patch_ak(fx):
+        events = fetch_capital_change_events(
+            "000423", company_name="东阿阿胶",
+        )
+    assert len(events) == 2
+    for ev in events:
+        assert ev["company_name"] == "东阿阿胶", (
+            f"company_name should be propagated; got {ev['company_name']!r}"
+        )
+
+
+def test_fetch_defaults_company_name_to_empty_string():
+    """When company_name is omitted, each event should default to empty string."""
+    fx = {
+        "eastmoney_dividend": [
+            {"公告日期": "2022-06-15", "送股": 0.0, "转增": 0.0, "派息": 6.0,
+             "进度": "实施", "除权除息日": "2022-06-20", "股权登记日": "2022-06-19", "红股上市日": "2022-06-22"},
+        ],
+        "eastmoney_allotment": [],
+        "cninfo_dividend": [],
+        "cninfo_allotment": [],
+    }
+    with _patch_ak(fx):
+        events = fetch_capital_change_events("000423")
+    assert len(events) == 1
+    assert events[0]["company_name"] == ""

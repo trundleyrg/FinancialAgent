@@ -13,12 +13,15 @@ def wired(monkeypatch):
         "src.graph.coordinator_nodes.CapitalChangeEventRepository",
         lambda *a, **kw: repo,
     )
+    def _fake_fetch(code, company_name=None):
+        return [{"company_name": company_name or "东阿阿胶",
+                  "stock_code": code,
+                  "report_year": 2024, "report_period": "FY",
+                  "event_type": "cash_dividend", "event_date": "2025-06-15",
+                  "cash_per_10_shares": 13.2, "source": "eastmoney"}]
     monkeypatch.setattr(
         "src.graph.coordinator_nodes.fetch_capital_change_events",
-        lambda code: [{"company_name": "东阿阿胶", "stock_code": code,
-                        "report_year": 2024, "report_period": "FY",
-                        "event_type": "cash_dividend", "event_date": "2025-06-15",
-                        "cash_per_10_shares": 13.2, "source": "eastmoney"}],
+        _fake_fetch,
     )
     return fake, repo
 
@@ -32,6 +35,7 @@ def test_node_fetches_when_count_is_zero(wired):
     rows = fake.data["capital_change_events"]
     assert len(rows) == 1
     assert rows[0]["cash_per_10_shares"] == 13.2
+    assert rows[0]["company_name"] == "东阿阿胶"
 
 
 def test_node_skips_when_already_populated(wired):
@@ -57,7 +61,7 @@ def test_node_fails_soft_on_akshare_error(monkeypatch):
         "src.graph.coordinator_nodes.CapitalChangeEventRepository",
         lambda *a, **kw: repo_inst,
     )
-    def _raise(code):
+    def _raise(code, company_name=None):
         raise RuntimeError("network down")
     monkeypatch.setattr(
         "src.graph.coordinator_nodes.fetch_capital_change_events",

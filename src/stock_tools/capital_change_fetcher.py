@@ -67,9 +67,12 @@ def _infer_event_type(cash: float, bonus: float, capitalized: float) -> str:
     return "cash_dividend"
 
 
-def fetch_capital_change_events(stock_code: str) -> List[Dict[str, Any]]:
+def fetch_capital_change_events(
+    stock_code: str,
+    company_name: Optional[str] = None,
+) -> List[Dict[str, Any]]:
     code = _normalize_stock_code(stock_code)
-    company_name = ""
+    company_name = company_name or ""
     try:
         df_em_div = ak.stock_history_dividend_detail(symbol=code, indicator="分红")
     except Exception as e:
