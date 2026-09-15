@@ -168,7 +168,10 @@ def fetch_capital_change_events(
             continue
         ratio_str = str(row.get("配股比例") or "")
         ratio_num = 0.0
-        for part in ratio_str.replace(":", "").split("配"):
+        # 「10配3」表示每 10 股可配 3 股；split("配") 通常得到 [base, shares]，
+        # 取末位数字部分（容错带「:」/前缀的格式如「配股比例: 10配3」）。
+        parts = ratio_str.replace(":", "").split("配")
+        for part in reversed(parts):
             if part.isdigit():
                 ratio_num = float(part)
                 break

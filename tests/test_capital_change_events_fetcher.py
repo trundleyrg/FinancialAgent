@@ -184,3 +184,73 @@ class TestReportYearFromCninfo:
     def test_unparseable_string_falls_back(self):
         # 不是已知 4 种 token，也无法拆出 4 位数字年份
         assert _report_year_from_cninfo("不规则文本", date(2024, 6, 15)) == 2024
+
+
+# ============================================================
+# _infer_event_type — 通过 fetcher 入口间接覆盖 capitalized_share 分支
+# ============================================================
+
+def test_fetch_emits_capitalized_share_event():
+    """送股=0, 转增>0, 派息=0 → event_type='capitalized_share'。
+
+    对应 _infer_event_type 第 3 个分支（cash=0, bonus=0, capitalized>0）。
+    """
+    fx = {
+        "eastmoney_dividend": [
+            {"公告日期": "2023-06-15", "送股": 0.0, "转增": 5.0, "派息": 0.0,
+             "进度": "实施", "除权除息日": "2023-06-20",
+             "股权登记日": "2023-06-19", "红股上市日": "2023-06-22"},
+        ],
+        "eastmoney_allotment": [],
+        "cninfo_dividend": [],
+        "cninfo_allotment": [],
+    }
+    with _patch_ak(fx):
+        events = fetch_capital_change_events("000423")
+    assert len(events) == 1
+    ev = events[0]
+    assert ev["event_type"] == "capitalized_share"
+    assert ev["capitalized_shares_per_10"] == 5.0
+    assert ev["cash_per_10_shares"] is None
+    assert ev["bonus_shares_per_10"] is None
+    assert ev["source"] == "eastmoney"
+
+
+def test_fetch_emits_allotment_event():
+    """Eastmoney 配股接口单行 → event_type='allotment'，解析配股比例/价格。"""
+    fx = {
+        "eastmoney_dividend": [],
+        "eastmoney_allotment": [
+            {"公告日期": "2023-04-01", "配股比例": "10配3", "配股价格": 15.5,
+             "进度": "实施", "除权除息日": "2023-04-05", "股权登记日": "2023-04-04"},
+        ],
+        "cninfo_dividend": [],
+        "cninfo_allotment": [],
+    }
+    with _patch_ak(fx):
+        events = fetch_capital_change_events("000423")
+    assert len(events) == 1
+    ev = events[0]
+    assert ev["event_type"] == "allotment"
+    assert ev["allotment_ratio_per_10"] == 3.0
+    assert ev["allotment_price"] == 15.5
+    assert ev["cash_per_10_shares"] is None
+    assert ev["bonus_shares_per_10"] is None
+    assert ev["capitalized_shares_per_10"] is None
+    assert ev["source"] == "eastmoney"
+
+
+def test_fetch_allotment_zero_price_yields_none():
+    """配股价格解析失败（0/NaN）时必须落为 None，不写入 0.0。"""
+    fx = {
+        "eastmoney_dividend": [],
+        "eastmoney_allotment": [
+            {"公告日期": "2023-04-01", "配股比例": "10配3", "配股价格": 0,
+             "进度": "实施", "除权除息日": None, "股权登记日": None},
+        ],
+        "cninfo_dividend": [],
+        "cninfo_allotment": [],
+    }
+    with _patch_ak(fx):
+        events = fetch_capital_change_events("000423")
+    assert events[0]["allotment_price"] is None
