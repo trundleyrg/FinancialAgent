@@ -75,3 +75,23 @@ def test_list_events_sorted_desc(repo, fake_connector):
     out = repo.list_events(ReportKey(stock_code="000423"))
     assert out[0]["event_date"] == "2025-06-15"
     assert out[1]["event_date"] == "2024-06-15"
+
+
+def test_list_by_report_year_filters_and_sorts(repo, fake_connector):
+    fake_connector.seed("capital_change_events", [
+        {"company_name": "A", "stock_code": "000423",
+         "report_year": 2023, "report_period": "FY",
+         "event_type": "cash_dividend", "event_date": "2024-06-15",
+         "cash_per_10_shares": 11.6, "source": "eastmoney"},
+        {"company_name": "A", "stock_code": "000423",
+         "report_year": 2024, "report_period": "FY",
+         "event_type": "cash_dividend", "event_date": "2025-06-15",
+         "cash_per_10_shares": 13.2, "source": "eastmoney"},
+    ])
+    out = repo.list_by_report_year(ReportKey(stock_code="000423"), 2023)
+    assert len(out) == 1
+    assert out[0]["cash_per_10_shares"] == 11.6
+
+
+def test_list_by_report_year_empty(repo):
+    assert repo.list_by_report_year(ReportKey(stock_code="000423"), 2020) == []
