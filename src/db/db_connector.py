@@ -159,6 +159,10 @@ class DuckDBModelAdapter:
         """
         if not updates:
             return 0
+        if not kwargs:
+            raise ValueError(
+                "update_records 需要至少一个过滤条件，避免误更新整张表",
+            )
         table_name = self._get_table_name(model_class)
         set_clauses = [f"{k} = ?" for k in updates.keys()]
         values: List[Any] = list(updates.values())
@@ -541,6 +545,10 @@ class DatabaseConnector:
         """
         if not updates:
             return 0
+        if not kwargs:
+            raise ValueError(
+                "update_records 需要至少一个过滤条件，避免误更新整张表",
+            )
         model_class = self._get_model_class(table_name)
 
         if self.database_type == "duckdb":
