@@ -40,6 +40,25 @@ class FakeConnector:
                 out.append(dict(r) if isinstance(r, dict) else r)
         return out
 
+    def insert_record(self, table_name: str, record: Dict[str, Any]) -> int:
+        rows = self.data.setdefault(table_name, [])
+        record = dict(record)  # 不要污染 seed 数据
+        if "id" not in record:
+            record["id"] = len(rows) + 1
+        rows.append(record)
+        return record["id"]
+
+    def update_records(
+        self, table_name: str, updates: Dict[str, Any], **filters: Any,
+    ) -> int:
+        rows = self.data.get(table_name, [])
+        updated = 0
+        for row in rows:
+            if all(_get(row, k) == v for k, v in filters.items()):
+                row.update(updates)
+                updated += 1
+        return updated
+
     def get_all_companies(self) -> List[Dict[str, Any]]:
         seen: Dict[str, Dict[str, Any]] = {}
         for r in self.data.get("financial_reports", []):

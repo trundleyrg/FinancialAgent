@@ -95,3 +95,36 @@ def test_list_by_report_year_filters_and_sorts(repo, fake_connector):
 
 def test_list_by_report_year_empty(repo):
     assert repo.list_by_report_year(ReportKey(stock_code="000423"), 2020) == []
+
+
+def test_upsert_many_inserts_new(repo, fake_connector):
+    events = [
+        {"company_name": "A", "stock_code": "000423",
+         "report_year": 2024, "report_period": "FY",
+         "event_type": "cash_dividend", "event_date": "2025-06-15",
+         "cash_per_10_shares": 13.2, "source": "eastmoney"},
+    ]
+    n = repo.upsert_many(events)
+    assert n == 1
+    assert fake_connector.data["capital_change_events"][0]["cash_per_10_shares"] == 13.2
+
+
+def test_upsert_many_idempotent_on_key(repo, fake_connector):
+    fake_connector.seed("capital_change_events", [
+        {"company_name": "A", "stock_code": "000423",
+         "report_year": 2024, "report_period": "FY",
+         "event_type": "cash_dividend", "event_date": "2025-06-15",
+         "cash_per_10_shares": 13.2, "source": "eastmoney"},
+    ])
+    same_event = {"company_name": "A", "stock_code": "000423",
+                  "report_year": 2024, "report_period": "FY",
+                  "event_type": "cash_dividend", "event_date": "2025-06-15",
+                  "cash_per_10_shares": 14.0, "source": "merged"}
+    repo.upsert_many([same_event])
+    rows = fake_connector.data["capital_change_events"]
+    assert len(rows) == 1
+    assert rows[0]["cash_per_10_shares"] == 14.0
+
+
+def test_upsert_many_empty_list(repo):
+    assert repo.upsert_many([]) == 0
