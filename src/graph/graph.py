@@ -3,12 +3,13 @@
 
 定义 FinancialAgent 的完整处理流程图：
 1. 检查数据可用性 → 判断是否需要解析 PDF
-2. 如果数据充足 → 直接进行数据分析
-3. 如果数据不足 → 解析 PDF → 提取文本和表格
-4. 提取财务数据 → 结构化数据
-5. 保存到数据库
-6. 并行执行：周期股分析 + 基本面分析
-7. 综合总结 → 最终建议
+2. 拉取股本变动事件（分红/送股/转增/配股），幂等 + fail-soft
+3. 如果数据充足 → 直接进行数据分析
+4. 如果数据不足 → 解析 PDF → 提取文本和表格
+5. 提取财务数据 → 结构化数据
+6. 保存到数据库
+7. 并行执行：周期股分析 + 基本面分析
+8. 综合总结 → 最终建议
 
 同时提供 FinancialAgentsGraph 类，用于协调整个投研 Agent 工作流。
 """
@@ -23,7 +24,8 @@ from src.graph.coordinator_nodes import (
     create_check_data_availability_node,
     create_parse_pdf_node,
     create_extract_financial_data_node,
-    create_save_to_database_node
+    create_save_to_database_node,
+    fetch_capital_changes_node,
 )
 from src.agents.analysis import (
     create_cyclical_analysis,
@@ -82,6 +84,7 @@ def create_financial_agent_graph(llm: Any) -> StateGraph:
 
     # 添加协调器节点
     graph.add_node("check_data_availability", create_check_data_availability_node())
+    graph.add_node("fetch_capital_changes", fetch_capital_changes_node)
     graph.add_node("parse_pdf", create_parse_pdf_node())
     graph.add_node("extract_financial_data", create_extract_financial_data_node())
     graph.add_node("save_to_database", create_save_to_database_node())
@@ -94,9 +97,12 @@ def create_financial_agent_graph(llm: Any) -> StateGraph:
     # 设置入口点
     graph.set_entry_point("check_data_availability")
 
-    # 条件路由：检查数据可用性后决定是否需要解析 PDF
+    # 数据可用性检查完成后，先拉取股本变动事件，再做条件路由
+    graph.add_edge("check_data_availability", "fetch_capital_changes")
+
+    # 条件路由：股本变动事件拉取后决定是否需要解析 PDF
     graph.add_conditional_edges(
-        "check_data_availability",
+        "fetch_capital_changes",
         should_parse_pdf,
         {
             "parse_pdf": "parse_pdf",       # 数据不足，需要解析 PDF
