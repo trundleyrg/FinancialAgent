@@ -191,7 +191,7 @@ def create_dividend_analysis(llm) -> Callable:
             market_data: Dict[str, Any] = {}
             if stock_code:
                 market_data = get_stock_market_data(stock_code)
-                dividend_stats = get_dividend_stats(stock_code, years=5)
+                dividend_stats = _get_dividend_stats_with_fallback(stock_code, years=5)
                 dividend_info["market_dividend_stats"] = dividend_stats
                 dividend_info["pe_ratio"] = market_data.get("pe_ratio", 0.0)
                 dividend_info["pb_ratio"] = market_data.get("pb_ratio", 0.0)
@@ -285,3 +285,27 @@ def _extract_dividend_info(financial_data: Dict[str, Any]) -> Dict[str, Any]:
         "payout_ratio": round(payout_ratio, 2),      # 分红率（%）
         "fcf_coverage": round(fcf_coverage, 2),      # 自由现金流对分红覆盖倍数
     }
+
+
+def _get_dividend_stats_with_fallback(
+    stock_code: str, years: int = 5,
+) -> Dict[str, Any]:
+    """DB 优先；空时退到 akshare 实时拉取。"""
+    try:
+        from src.db import CapitalChangeEventRepository, ReportKey
+        from src.db.db_connector import get_db
+        repo = CapitalChangeEventRepository(get_db())
+        events = repo.list_events(ReportKey(stock_code=stock_code))
+        if events:
+            stats = repo.aggregate_dividend_stats(
+                ReportKey(stock_code=stock_code), years=years,
+            )
+            stats["source"] = "db"
+            stats["total_event_count"] = len(events)
+            return stats
+    except Exception as exc:
+        logger.warning("DB 分红读取失败 (%s): %s — fallback 到实时拉取", stock_code, exc)
+    stats = get_dividend_stats(stock_code, years=years)
+    if isinstance(stats, dict):
+        stats["source"] = "live"
+    return stats
