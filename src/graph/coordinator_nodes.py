@@ -13,6 +13,9 @@ from src.stock_tools.stock_type_config import classify_by_keywords
 from src.agents.tools.db_tools import check_company_data_availability
 from src.tools.chapter_extractor import PDFChapterExtractor
 from src.db.db_connector import get_db
+from src.db import CapitalChangeEventRepository, ReportKey
+from src.stock_tools.capital_change_fetcher import fetch_capital_change_events
+from src.utils.logger import manager
 
 logger = logging.getLogger("Agent.Coordinator")
 
@@ -327,3 +330,34 @@ def get_coordinator_nodes() -> Dict[str, Callable]:
         "extract_financial_data": create_extract_financial_data_node(),
         "save_to_database": create_save_to_database_node()
     }
+
+
+def fetch_capital_changes_node(state: FinancialState) -> FinancialState:
+    """拉取股本变动事件流（分红/送股/转增/配股），幂等 + fail-soft。
+
+    - count == 0 → 拉取并 upsert
+    - count > 0  → 跳过
+    - 异常      → 不阻塞主分析，capital_changes_fetched=False
+    """
+    logger = manager.get_logger("Graph.FetchCapitalChanges", "graph.log")
+
+    stock_code = state.get("stock_code")
+    company_name = state.get("company_name")
+    if not stock_code and not company_name:
+        return {"capital_changes_fetched": False, "capital_changes_count": 0}
+
+    key = ReportKey(stock_code=stock_code, company_name=company_name)
+    repo = CapitalChangeEventRepository(get_db())
+    existing = repo.count_events(key)
+    if existing > 0:
+        logger.info("股本变动事件已存在 (%s): %d 条，跳过", stock_code, existing)
+        return {"capital_changes_fetched": True, "capital_changes_count": existing}
+
+    try:
+        events = fetch_capital_change_events(stock_code or company_name)
+        count = repo.upsert_many(events)
+        logger.info("股本变动事件拉取并入库 (%s): %d 条", stock_code, count)
+        return {"capital_changes_fetched": True, "capital_changes_count": count}
+    except Exception as e:
+        logger.warning("股本变动事件拉取失败 (%s): %s — 不影响后续分析", stock_code, e)
+        return {"capital_changes_fetched": False, "capital_changes_count": 0}
