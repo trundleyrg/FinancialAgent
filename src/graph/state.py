@@ -77,3 +77,9 @@ class FinancialState(TypedDict):
 
     # 最终保存到数据库的记录 ID
     record_id: Optional[int]
+
+    # ========== 股本变动事件数据 ==========
+    # 是否已从数据库获取股本变动事件
+    capital_changes_fetched: Optional[bool]
+    # 股本变动事件记录数
+    capital_changes_count: Optional[int]
