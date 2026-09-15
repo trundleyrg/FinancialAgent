@@ -25,6 +25,7 @@ from src.db.repository.statements import (
 )
 from src.db.repository.metrics import MetricRepository
 from src.db.repository.share_structure import ShareStructureRepository
+from src.db.repository.capital_change_events import CapitalChangeEventRepository
 
 __all__ = [
     "ReportKey",
@@ -33,6 +34,7 @@ __all__ = [
     "StatementRepository",
     "MetricRepository",
     "ShareStructureRepository",
+    "CapitalChangeEventRepository",
     "StatementSpec",
     "register_statement",
     "unregister_statement",
