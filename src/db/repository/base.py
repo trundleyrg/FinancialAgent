@@ -23,8 +23,7 @@ class _ModelToDict:
             return None
         if isinstance(record, dict):
             return {k: v for k, v in record.items() if k != "id"}
-        # Peewee Model: column data lives in `__data__` (name-mangled to
-        # `_ClassName__data__`, but attribute access still works directly).
+        # Peewee stores column data in `__data__` (instance attribute, not name-mangled)
         if hasattr(record, "__data__") and isinstance(record.__data__, dict) and record.__data__:
             return {k: v for k, v in record.__data__.items() if k != "id"}
         # Generic object with `_data` dict (legacy / test fixture shape).
