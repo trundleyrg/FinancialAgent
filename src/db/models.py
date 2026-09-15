@@ -713,6 +713,47 @@ class ShareStructure(Model):
         database = db
         table_name = 'share_structure'
 
+
+class CapitalChangeEvent(Model):
+    """
+    股本变动事件流 ORM 模型
+    统一记录分红 / 送股 / 转增 / 配股 / 增发 等导致股本或股东权益变动的事件。
+    数据来源：东方财富 stock_history_dividend_detail + 巨潮 stock_dividend_cninfo。
+    """
+    id = AutoField(primary_key=True)
+    company_name = CharField(max_length=255, null=False, index=True)
+    stock_code = CharField(max_length=20, null=False, index=True)
+    report_year = IntegerField(null=False, index=True)
+    report_period = CharField(max_length=10, null=False)
+
+    event_type = CharField(max_length=32, null=False, index=True)
+        # cash_dividend | bonus_share | capitalized_share | allotment | combination
+    event_date = DateField(null=False, index=True)
+    ex_date = DateField(null=True)
+    record_date = DateField(null=True)
+    payment_date = DateField(null=True)
+    listing_date = DateField(null=True)
+    status = CharField(max_length=16, null=True)
+
+    cash_per_10_shares = FloatField(null=True, help_text="每10股派息(元,含税)")
+    bonus_shares_per_10 = FloatField(null=True, help_text="每10股送股(股)")
+    capitalized_shares_per_10 = FloatField(null=True, help_text="每10股转增(股)")
+    allotment_ratio_per_10 = FloatField(null=True, help_text="每10股配股(股)")
+    allotment_price = FloatField(null=True, help_text="配股价格(元/股)")
+    allotment_shares = FloatField(null=True, help_text="实际配股数量(股)")
+
+    source = CharField(max_length=32, null=False)
+    scheme_description = CharField(max_length=512, null=True)
+    created_at = DateTimeField(default=datetime.now)
+
+    class Meta:
+        database = db
+        table_name = 'capital_change_events'
+        indexes = (
+            (('stock_code', 'report_year', 'event_type'), False),
+            (('stock_code', 'event_date'), False),
+        )
+
 # --- 2. Pydantic V2 Models (用于结构化输出提取) ---
 
 class MetricItem(BaseModel):

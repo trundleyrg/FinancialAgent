@@ -24,7 +24,7 @@ from src.db.models import (
     ConsolidatedBalanceSheet, ParentCompanyBalanceSheet,
     ConsolidatedIncomeStatement, ParentCompanyIncomeStatement,
     ConsolidatedCashFlowStatement, ParentCompanyCashFlowStatement,
-    ShareStructure
+    ShareStructure, CapitalChangeEvent
 )
 from src.utils.logger import db_logger
 
@@ -236,7 +236,7 @@ class DatabaseConnector:
                 ConsolidatedBalanceSheet, ParentCompanyBalanceSheet,
                 ConsolidatedIncomeStatement, ParentCompanyIncomeStatement,
                 ConsolidatedCashFlowStatement, ParentCompanyCashFlowStatement,
-                ShareStructure,
+                ShareStructure, CapitalChangeEvent,
             ]
             self.engine.create_tables(tables, safe=True)
             db_logger.info("PostgreSQL表格创建完成")
@@ -252,7 +252,7 @@ class DatabaseConnector:
             ConsolidatedBalanceSheet, ParentCompanyBalanceSheet,
             ConsolidatedIncomeStatement, ParentCompanyIncomeStatement,
             ConsolidatedCashFlowStatement, ParentCompanyCashFlowStatement,
-            ShareStructure,
+            ShareStructure, CapitalChangeEvent,
         ]
         
         for table in tables:
@@ -383,6 +383,7 @@ class DatabaseConnector:
             'consolidated_cash_flow_statement': ConsolidatedCashFlowStatement,
             'parent_company_cash_flow_statement': ParentCompanyCashFlowStatement,
             'share_structure': ShareStructure,
+            'capital_change_events': CapitalChangeEvent,
         }
         if table_name not in model_map:
             raise ValueError(f"未知的表名: {table_name}")
@@ -513,7 +514,7 @@ class DatabaseConnector:
                 ConsolidatedBalanceSheet, ParentCompanyBalanceSheet,
                 ConsolidatedIncomeStatement, ParentCompanyIncomeStatement,
                 ConsolidatedCashFlowStatement, ParentCompanyCashFlowStatement,
-                ShareStructure,
+                ShareStructure, CapitalChangeEvent,
                 FinancialReport,
             ]
             self.engine.drop_tables(tables, safe=True)
