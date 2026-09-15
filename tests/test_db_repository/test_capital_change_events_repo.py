@@ -169,3 +169,63 @@ def test_aggregate_dividend_stats_excludes_allotment(repo, fake_connector):
     ])
     out = repo.aggregate_dividend_stats(ReportKey(stock_code="000423"), years=5)
     assert out["event_count"] == 0
+
+
+def test_aggregate_dividend_stats_cutoff_year_excludes_old_events(
+    repo, fake_connector,
+):
+    """cutoff_year 窗口外的 cash_dividend 事件必须不计入合计 / 计数。
+
+    repo 逻辑：cutoff_year = date.today().year - years + 1，
+    即「过去 years 年的所有事件」均视为窗口内。
+
+    本测试在窗口内插 4 条、窗口外插 2 条（10 年前 / 5 年前），
+    断言 event_count == 4 且 total 仅汇总窗口内 4 条。
+    """
+    today = date.today()
+    cutoff_year = today.year - 5 + 1  # 镜像 repo 公式
+
+    recent_years = [cutoff_year, cutoff_year + 1, today.year - 1, today.year]
+    recent_events = [
+        {"company_name": "A", "stock_code": "000423",
+         "report_year": y, "report_period": "FY",
+         "event_type": "cash_dividend", "event_date": f"{y}-06-15",
+         "cash_per_10_shares": 10.0, "source": "eastmoney"}
+        for y in recent_years
+    ]
+    old_events = [
+        {"company_name": "A", "stock_code": "000423",
+         "report_year": cutoff_year - 10, "report_period": "FY",
+         "event_type": "cash_dividend", "event_date": f"{cutoff_year - 10}-06-15",
+         "cash_per_10_shares": 100.0, "source": "eastmoney"},
+        {"company_name": "A", "stock_code": "000423",
+         "report_year": cutoff_year - 5, "report_period": "FY",
+         "event_type": "cash_dividend", "event_date": f"{cutoff_year - 5}-06-15",
+         "cash_per_10_shares": 50.0, "source": "eastmoney"},
+    ]
+    fake_connector.seed("capital_change_events", recent_events + old_events)
+    out = repo.aggregate_dividend_stats(
+        ReportKey(stock_code="000423"), years=5,
+    )
+    assert out["event_count"] == 4
+    assert out["total_cash_per_10_shares"] == round(4 * 10.0, 4)
+    assert out["average_cash_per_10_shares"] == round(10.0, 4)
+
+
+def test_aggregate_dividend_stats_cutoff_year_includes_boundary_year(
+    repo, fake_connector,
+):
+    """cutoff_year 当年的事件应当被包含（边界 >= 而非 >）。"""
+    today = date.today()
+    cutoff_year = today.year - 3 + 1
+    fake_connector.seed("capital_change_events", [
+        {"company_name": "A", "stock_code": "000423",
+         "report_year": cutoff_year, "report_period": "FY",
+         "event_type": "cash_dividend", "event_date": f"{cutoff_year}-03-15",
+         "cash_per_10_shares": 5.5, "source": "eastmoney"},
+    ])
+    out = repo.aggregate_dividend_stats(
+        ReportKey(stock_code="000423"), years=3,
+    )
+    assert out["event_count"] == 1
+    assert out["total_cash_per_10_shares"] == 5.5
