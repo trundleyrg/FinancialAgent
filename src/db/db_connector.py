@@ -156,6 +156,9 @@ class DuckDBModelAdapter:
 
         DuckDB 的 rowcount 在 UPDATE/DELETE 上不可靠（部分版本恒为 -1），
         因此借助 RETURNING 收集受影响行的 id 来精确计数。
+
+        SQL 安全：updates 与 kwargs 的所有 key 都必须命中模型字段白名单，
+        避免外部传入恶意 key 拼接成注入。
         """
         if not updates:
             return 0
@@ -163,6 +166,13 @@ class DuckDBModelAdapter:
             raise ValueError(
                 "update_records 需要至少一个过滤条件，避免误更新整张表",
             )
+        valid_columns = set(model_class._meta.fields.keys())
+        for k in updates.keys():
+            if k not in valid_columns:
+                raise ValueError(f"未知列名: {k}")
+        for k in kwargs.keys():
+            if k not in valid_columns:
+                raise ValueError(f"未知列名: {k}")
         table_name = self._get_table_name(model_class)
         set_clauses = [f"{k} = ?" for k in updates.keys()]
         values: List[Any] = list(updates.values())
@@ -178,10 +188,17 @@ class DuckDBModelAdapter:
         return len(rows)
 
     def delete_records(self, model_class: Type[Model], **kwargs: Any) -> int:
-        """按 kwargs 过滤批量删除记录。返回受影响的行数。"""
+        """按 kwargs 过滤批量删除记录。返回受影响的行数。
+
+        SQL 安全：kwargs 的所有 key 都必须命中模型字段白名单。
+        """
         table_name = self._get_table_name(model_class)
         if not kwargs:
             raise ValueError("delete_records 需要至少一个过滤条件，避免误删整张表")
+        valid_columns = set(model_class._meta.fields.keys())
+        for k in kwargs.keys():
+            if k not in valid_columns:
+                raise ValueError(f"未知列名: {k}")
         where_clauses: List[str] = []
         values: List[Any] = []
         for key, value in kwargs.items():
@@ -542,6 +559,10 @@ class DatabaseConnector:
         :param table_name: 表名
         :param updates: 待更新字段字典
         :param kwargs: WHERE 过滤条件
+
+        SQL 安全：kwargs 的所有 key 都必须命中模型字段白名单，
+        防止外部传入未校验 key 拼接成注入；该校验同时为 PostgreSQL
+        分支的「hasattr → False 静默跳过 → 全表 UPDATE」补一道防线。
         """
         if not updates:
             return 0
@@ -550,6 +571,10 @@ class DatabaseConnector:
                 "update_records 需要至少一个过滤条件，避免误更新整张表",
             )
         model_class = self._get_model_class(table_name)
+        valid_columns = set(model_class._meta.fields.keys())
+        for k in kwargs.keys():
+            if k not in valid_columns:
+                raise ValueError(f"未知列名: {k}")
 
         if self.database_type == "duckdb":
             return self._duckdb_adapter.update_records(
@@ -566,12 +591,20 @@ class DatabaseConnector:
         """通用按条件批量删除。返回受影响的行数。
 
         必须至少提供一个过滤条件，避免误删整张表。
+
+        SQL 安全：kwargs 的所有 key 都必须命中模型字段白名单，
+        防止外部传入未校验 key 拼接成注入；该校验同时为 PostgreSQL
+        分支的「hasattr → False 静默跳过 → 全表 DELETE」补一道防线。
         """
         if not kwargs:
             raise ValueError(
                 "delete_records 需要至少一个过滤条件，避免误删整张表",
             )
         model_class = self._get_model_class(table_name)
+        valid_columns = set(model_class._meta.fields.keys())
+        for k in kwargs.keys():
+            if k not in valid_columns:
+                raise ValueError(f"未知列名: {k}")
 
         if self.database_type == "duckdb":
             return self._duckdb_adapter.delete_records(model_class, **kwargs)
