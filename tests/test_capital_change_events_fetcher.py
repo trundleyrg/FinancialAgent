@@ -33,18 +33,27 @@ def _patch_ak(fixture_data):
     )
 
 
-def test_fetch_returns_cash_dividend_event():
+def test_fetch_returns_cash_dividend_events_with_left_join():
+    """Left-join: all eastmoney rows kept; cninfo enrichment upgrades matching rows."""
     fx = json.loads(FIXTURE.read_text(encoding="utf-8"))
     with _patch_ak(fx):
         events = fetch_capital_change_events("000423")
-    assert len(events) == 1
-    ev = events[0]
-    assert ev["stock_code"] == "000423"
-    assert ev["event_type"] == "cash_dividend"
-    assert ev["cash_per_10_shares"] == 11.6
-    assert ev["report_year"] == 2023   # 来自 cninfo.报告时间 "2023年报"
-    assert ev["ex_date"] == "2024-06-20"
-    assert ev["source"] == "merged"
+    # Both eastmoney rows survive (left-join)
+    assert len(events) == 2
+    by_date = {e["event_date"]: e for e in events}
+    # 2024-06-15 matches cninfo: source upgraded to "merged", report_year from cninfo
+    matched = by_date["2024-06-15"]
+    assert matched["event_type"] == "cash_dividend"
+    assert matched["cash_per_10_shares"] == 11.6
+    assert matched["report_year"] == 2023   # 来自 cninfo.报告时间 "2023年报"
+    assert matched["ex_date"] == "2024-06-20"
+    assert matched["source"] == "merged"
+    # 2023-06-15 has no cninfo match: source stays "eastmoney", report_year from event_date
+    unmatched = by_date["2023-06-15"]
+    assert unmatched["event_type"] == "cash_dividend"
+    assert unmatched["cash_per_10_shares"] == 7.8
+    assert unmatched["report_year"] == 2023   # fallback: event_date.year
+    assert unmatched["source"] == "eastmoney"
 
 
 def test_fetch_returns_empty_when_no_data():
