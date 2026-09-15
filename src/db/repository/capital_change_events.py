@@ -46,15 +46,34 @@ class CapitalChangeEventRepository(BaseRepository):
                 stock_code=key[0], event_date=str(key[1]),
                 event_type=key[2],
             )
+            updates = {k: v for k, v in ev.items() if k != "id"}
             if existing:
-                self.connector.update_records(
-                    "capital_change_events",
-                    {k: v for k, v in ev.items() if k != "id"},
-                    stock_code=key[0], event_date=str(key[1]),
-                    event_type=key[2],
-                )
+                # 真实 DatabaseConnector 提供 filter-based update_records（kwargs 过滤）。
+                # FakeConnector（test conftest）也提供同名方法。两者签名一致。
+                if hasattr(self.connector, "update_records"):
+                    self.connector.update_records(
+                        "capital_change_events",
+                        updates,
+                        stock_code=key[0], event_date=str(key[1]),
+                        event_type=key[2],
+                    )
+                else:
+                    # 兜底：先查记录 id，再走按 id 更新的 update_record
+                    for r in existing:
+                        rid = r.get("id") if isinstance(r, dict) else getattr(r, "id", None)
+                        if rid is None:
+                            continue
+                        self.connector.update_record(
+                            "capital_change_events", rid, **updates,
+                        )
             else:
-                self.connector.insert_record("capital_change_events", ev)
+                # insert_record 双签名兼容：
+                # - 真实 DatabaseConnector：insert_record(table, **kwargs)
+                # - FakeConnector：insert_record(table, record_dict)（占位 dict）
+                try:
+                    self.connector.insert_record("capital_change_events", **ev)
+                except TypeError:
+                    self.connector.insert_record("capital_change_events", ev)
             written += 1
         return written
 

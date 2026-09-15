@@ -11,9 +11,10 @@ class _ModelToDict:
     优先级：
     1. None → None
     2. dict → 过滤掉 id 字段（dict 形式的"id"剥离）
-    3. 带非空 __dict__ 的对象（Peewee Model）→ __dict__ 拷贝，剥离 _* / id
-    4. 带 _data 的对象 → dict(_data)
-    5. 兜底 None
+    3. 带非空 __data__ 的对象（Peewee Model）→ __data__ 拷贝，剥离 id
+    4. 带非空 _data 的对象（legacy / 测试 fixture 形态）→ dict(_data)，剥离 id
+    5. 带非空 __dict__ 的对象（generic）→ __dict__ 拷贝，剥离 _* / id
+    6. 兜底 None
     """
 
     @staticmethod
@@ -22,14 +23,20 @@ class _ModelToDict:
             return None
         if isinstance(record, dict):
             return {k: v for k, v in record.items() if k != "id"}
+        # Peewee Model: column data lives in `__data__` (name-mangled to
+        # `_ClassName__data__`, but attribute access still works directly).
+        if hasattr(record, "__data__") and isinstance(record.__data__, dict) and record.__data__:
+            return {k: v for k, v in record.__data__.items() if k != "id"}
+        # Generic object with `_data` dict (legacy / test fixture shape).
+        if hasattr(record, "_data") and isinstance(record._data, dict) and record._data:
+            return {k: v for k, v in record._data.items() if k != "id"}
+        # Generic object fallback (non-Peewee, no _data).
         if hasattr(record, "__dict__") and record.__dict__:
             return {
                 k: v
                 for k, v in record.__dict__.items()
                 if not k.startswith("_") and k != "id"
             }
-        if hasattr(record, "_data"):
-            return dict(record._data)
         return None
 
 
