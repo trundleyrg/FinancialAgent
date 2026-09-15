@@ -149,6 +149,47 @@ class DuckDBModelAdapter:
         self.conn.execute(sql, [record_id])
         return True
 
+    def update_records(
+        self, model_class: Type[Model], updates: Dict[str, Any], **kwargs: Any,
+    ) -> int:
+        """按 kwargs 过滤批量更新记录。返回受影响的行数。
+
+        DuckDB 的 rowcount 在 UPDATE/DELETE 上不可靠（部分版本恒为 -1），
+        因此借助 RETURNING 收集受影响行的 id 来精确计数。
+        """
+        if not updates:
+            return 0
+        table_name = self._get_table_name(model_class)
+        set_clauses = [f"{k} = ?" for k in updates.keys()]
+        values: List[Any] = list(updates.values())
+        where_clauses: List[str] = []
+        for key, value in kwargs.items():
+            where_clauses.append(f"{key} = ?")
+            values.append(value)
+        sql = (
+            f"UPDATE {table_name} SET {', '.join(set_clauses)} "
+            f"WHERE {' AND '.join(where_clauses)} RETURNING id"
+        )
+        rows = self.conn.execute(sql, values).fetchall()
+        return len(rows)
+
+    def delete_records(self, model_class: Type[Model], **kwargs: Any) -> int:
+        """按 kwargs 过滤批量删除记录。返回受影响的行数。"""
+        table_name = self._get_table_name(model_class)
+        if not kwargs:
+            raise ValueError("delete_records 需要至少一个过滤条件，避免误删整张表")
+        where_clauses: List[str] = []
+        values: List[Any] = []
+        for key, value in kwargs.items():
+            where_clauses.append(f"{key} = ?")
+            values.append(value)
+        sql = (
+            f"DELETE FROM {table_name} WHERE {' AND '.join(where_clauses)} "
+            f"RETURNING id"
+        )
+        rows = self.conn.execute(sql, values).fetchall()
+        return len(rows)
+
 
 class DatabaseConnector:
     """数据库连接器，提供增删查改操作，支持 PostgreSQL 和 DuckDB"""
@@ -478,7 +519,7 @@ class DatabaseConnector:
         :return: 是否删除成功
         """
         model_class = self._get_model_class(table_name)
-        
+
         if self.database_type == "duckdb":
             return self._duckdb_adapter.delete(model_class, record_id)
         else:
@@ -488,6 +529,50 @@ class DatabaseConnector:
                 return True
             except model_class.DoesNotExist:
                 return False
+
+    def update_records(
+        self, table_name: str, updates: Dict[str, Any], **kwargs: Any,
+    ) -> int:
+        """通用按条件批量更新。返回受影响的行数。
+
+        :param table_name: 表名
+        :param updates: 待更新字段字典
+        :param kwargs: WHERE 过滤条件
+        """
+        if not updates:
+            return 0
+        model_class = self._get_model_class(table_name)
+
+        if self.database_type == "duckdb":
+            return self._duckdb_adapter.update_records(
+                model_class, updates, **kwargs,
+            )
+        query = model_class.update(updates)
+        for key, value in kwargs.items():
+            if hasattr(model_class, key):
+                field = getattr(model_class, key)
+                query = query.where(field == value)
+        return query.execute()
+
+    def delete_records(self, table_name: str, **kwargs: Any) -> int:
+        """通用按条件批量删除。返回受影响的行数。
+
+        必须至少提供一个过滤条件，避免误删整张表。
+        """
+        if not kwargs:
+            raise ValueError(
+                "delete_records 需要至少一个过滤条件，避免误删整张表",
+            )
+        model_class = self._get_model_class(table_name)
+
+        if self.database_type == "duckdb":
+            return self._duckdb_adapter.delete_records(model_class, **kwargs)
+        query = model_class.delete()
+        for key, value in kwargs.items():
+            if hasattr(model_class, key):
+                field = getattr(model_class, key)
+                query = query.where(field == value)
+        return query.execute()
 
     def drop_tables(self):
         """删除所有数据表"""
