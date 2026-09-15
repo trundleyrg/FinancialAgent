@@ -1,10 +1,14 @@
 import json
+from datetime import date
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 import pandas as pd
 import pytest
 
-from src.stock_tools.capital_change_fetcher import fetch_capital_change_events
+from src.stock_tools.capital_change_fetcher import (
+    _report_year_from_cninfo,
+    fetch_capital_change_events,
+)
 
 FIXTURE = Path(__file__).parent / "fixtures" / "capital_change_events_000423.json"
 
@@ -140,3 +144,43 @@ def test_fetch_defaults_company_name_to_empty_string():
         events = fetch_capital_change_events("000423")
     assert len(events) == 1
     assert events[0]["company_name"] == ""
+
+
+# ============================================================
+# _report_year_from_cninfo — 解析巨潮「报告时间」字段
+# ============================================================
+
+class TestReportYearFromCninfo:
+    """直接覆盖 4 种报告期格式 + 兜底分支。"""
+
+    def _fb(self):
+        # 兜底回退：与 fetcher 调用约定一致
+        return date(2024, 6, 15)
+
+    def test_annual_report(self):
+        assert _report_year_from_cninfo("2023年报", self._fb()) == 2023
+
+    def test_half_year_report(self):
+        assert _report_year_from_cninfo("2023中报", self._fb()) == 2023
+
+    def test_q1_report(self):
+        assert _report_year_from_cninfo("2023一季报", self._fb()) == 2023
+
+    def test_q3_report(self):
+        assert _report_year_from_cninfo("2023三季报", self._fb()) == 2023
+
+    def test_annual_with_extra_suffix(self):
+        assert _report_year_from_cninfo("2023年报分配", self._fb()) == 2023
+
+    def test_none_falls_back_to_fallback_date_year(self):
+        assert _report_year_from_cninfo(None, date(2024, 6, 15)) == 2024
+
+    def test_empty_string_falls_back_to_fallback_date_year(self):
+        assert _report_year_from_cninfo("", date(2024, 6, 15)) == 2024
+
+    def test_none_fallback_date_returns_zero(self):
+        assert _report_year_from_cninfo(None, None) == 0
+
+    def test_unparseable_string_falls_back(self):
+        # 不是已知 4 种 token，也无法拆出 4 位数字年份
+        assert _report_year_from_cninfo("不规则文本", date(2024, 6, 15)) == 2024

@@ -46,9 +46,13 @@ def _to_date(v: Any) -> Optional[date]:
 def _report_year_from_cninfo(report_time: Any, fallback_date: Optional[date]) -> int:
     if report_time:
         m = str(report_time)
-        for token in m.replace("年报", "年").replace("中报", "年").split("年"):
-            if token.isdigit() and len(token) == 4:
-                return int(token)
+        # 兼容 4 种巨潮「报告时间」格式：年报 / 中报 / 一季报 / 三季报。
+        # 每个 token 都含「年」字，统一替换为「年」分隔符后取首个 4 位数字。
+        for token in ("年报", "中报", "一季报", "三季报"):
+            m = m.replace(token, "年")
+        for part in m.split("年"):
+            if part.isdigit() and len(part) == 4:
+                return int(part)
     return fallback_date.year if fallback_date else 0
 
 
