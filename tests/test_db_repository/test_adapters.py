@@ -1,5 +1,5 @@
 import pytest
-from src.agents.tools import db_tools
+from src.tools import db_tools
 from tests.test_db_repository.conftest import FakeConnector
 
 

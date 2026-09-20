@@ -10,7 +10,7 @@ import logging
 
 from src.graph.state import FinancialState
 from src.stock_tools.stock_type_config import classify_by_keywords
-from src.agents.tools.db_tools import check_company_data_availability
+from src.tools.db_tools import check_company_data_availability
 from src.tools.chapter_extractor import PDFChapterExtractor
 from src.db.db_connector import get_db
 from src.db import CapitalChangeEventRepository, ReportKey

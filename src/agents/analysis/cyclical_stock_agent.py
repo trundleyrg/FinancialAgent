@@ -36,7 +36,7 @@
 - langgraph: Agent 流程编排
 - langchain: LLM 调用
 - src.agents.state: Agent 状态定义
-- src.agents.tools: 数据库查询和计算工具
+- src.tools: 数据库查询和计算工具
 
 作者：FinancialAgent Team
 创建日期：2026-03-27
@@ -50,8 +50,8 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import JsonOutputParser
 
 from src.graph.state import FinancialState
-from src.agents.tools.db_tools import get_all_financial_data
-from src.agents.tools.calculation_tools import (
+from src.tools.db_tools import get_all_financial_data
+from src.tools.calculation_tools import (
     calculate_profitability,
     calculate_liquidity,
     calculate_solvency,
