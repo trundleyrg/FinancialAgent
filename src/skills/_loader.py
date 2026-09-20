@@ -18,6 +18,21 @@ logger = logging.getLogger("Skills")
 SKILLS_ROOT = Path(__file__).parent
 
 
+def read_skill_description(skill_md: Path) -> str:
+    """从 SKILL.md YAML frontmatter 提取 description 字段。
+
+    skill 模块在导入时调用本函数以同步 DESCRIPTION 与 frontmatter.description，
+    避免双写漂移。若 frontmatter 不合法，抛 RuntimeError（loader 已在校验阶段排除）。
+    """
+    content = skill_md.read_text(encoding="utf-8")
+    metadata = _parse_skill_metadata(content, str(skill_md), skill_md.parent.name)
+    if metadata is None or not metadata.get("description"):
+        raise RuntimeError(
+            f"SKILL.md frontmatter 缺少 description：{skill_md}",
+        )
+    return metadata["description"]
+
+
 def discover_skills(skills_dir: Path | None = None) -> dict[str, object]:
     """扫描 skills_dir/<name>/skill.py，返回 {dir_name: module}。
 

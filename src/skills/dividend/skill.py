@@ -1,9 +1,11 @@
 """红利股分析 skill（占位 — P3 阶段实现完整逻辑）。"""
 from pathlib import Path
 
+from src.skills._loader import read_skill_description
+
 SKILL_DIR = Path(__file__).parent
 
-DESCRIPTION = "红利股分析：分红能力 + 财务健康度 + 股息率 + 估值 + 风险（占位）"
+DESCRIPTION = read_skill_description(SKILL_DIR / "SKILL.md")
 
 
 def run(state, llm) -> dict:

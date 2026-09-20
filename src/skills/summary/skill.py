@@ -1,9 +1,11 @@
 """投资建议汇总 skill（占位 — P3 阶段实现完整逻辑）。"""
 from pathlib import Path
 
+from src.skills._loader import read_skill_description
+
 SKILL_DIR = Path(__file__).parent
 
-DESCRIPTION = "投资建议汇总：综合各分析结果给出最终评级（占位）"
+DESCRIPTION = read_skill_description(SKILL_DIR / "SKILL.md")
 
 
 def run(state, llm) -> dict:
