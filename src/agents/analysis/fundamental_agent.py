@@ -67,7 +67,7 @@ from src.tools.calculation_tools import (
     calculate_solvency,
     calculate_growth,
 )
-from src.stock_tools.market_data_tool import get_stock_market_data
+from src.tools.market_data_tool import get_stock_market_data
 
 logger = logging.getLogger("Agent.Fundamental")
 

@@ -32,7 +32,7 @@ from src.agents.analysis import (
     create_fundamental_analysis,
     create_summary_agent
 )
-from src.stock_tools.stock_type_config import (
+from src.tools.stock_type_config import (
     STOCK_TYPES,
     classify_by_keywords,
 )

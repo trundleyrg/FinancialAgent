@@ -5,7 +5,7 @@ from unittest.mock import patch, MagicMock
 import pandas as pd
 import pytest
 
-from src.stock_tools.capital_change_fetcher import (
+from src.tools.capital_change_fetcher import (
     _report_year_from_cninfo,
     fetch_capital_change_events,
 )

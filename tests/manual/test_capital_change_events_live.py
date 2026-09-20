@@ -23,7 +23,7 @@ def _build_repo():
 
 def _fetch_events_live(stock_code: str):
     """Lazy akshare import — only triggers network when --live."""
-    from src.stock_tools.capital_change_fetcher import fetch_capital_change_events
+    from src.tools.capital_change_fetcher import fetch_capital_change_events
 
     return fetch_capital_change_events(stock_code)
 
