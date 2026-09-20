@@ -9,9 +9,9 @@ FinancialAgent 是一个基于 LangGraph 的智能代理系统，用于解析上
 ## 命令
 
 ```bash
-# 安装依赖
-poetry install
-poetry shell
+# 安装依赖（conda agent 环境）
+conda activate agent
+uv pip install -r requirements.txt
 
 # 运行 CLI（处理 data/000423/ 中的 PDF）
 python main.py

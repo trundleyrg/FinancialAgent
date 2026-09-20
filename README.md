@@ -62,8 +62,10 @@ FinancialAgent/
 ├── docs/                     # 文档目录
 ├── .env                      # 敏感信息 (API Keys, DB Credentials)
 ├── main.py                   # 程序入口
-├── pyproject.toml            # Poetry 依赖管理配置
-└── poetry.lock               # Poetry 锁定文件
+├── requirements.txt          # 依赖声明（uv pip install -r requirements.txt）
+├── ruff.toml                 # Ruff 配置
+├── mypy.ini                  # Mypy 配置
+└── pytest.ini                # pytest 配置
 ```
 
 ## 数据库查询层
