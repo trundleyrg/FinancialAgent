@@ -111,14 +111,14 @@ def test_list_events_sorted_desc():
 def test_dividend_agent_reads_from_db():
     """_get_dividend_stats_with_fallback should hit DB (source='db') and return stats."""
     # Pre-import src.graph to break the circular import chain
-    # (dividend_stock_agent imports src.graph.state which loads src.graph.__init__,
+    # (dividend skill imports src.graph.state which loads src.graph.__init__,
     # which imports graph.py which imports src.agents.analysis back).
     import src.graph  # noqa: F401
-    from src.agents.analysis.dividend_stock_agent import (
-        _get_dividend_stats_with_fallback,
+    from src.skills.dividend.tools import (
+        get_dividend_stats_with_fallback,
     )
 
-    stats = _get_dividend_stats_with_fallback(STOCK_CODE, years=5)
+    stats = get_dividend_stats_with_fallback(STOCK_CODE, years=5)
     assert stats.get("source") == "db", (
         f"expected stats from db; got source={stats.get('source')}"
     )

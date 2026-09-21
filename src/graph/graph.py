@@ -207,9 +207,11 @@ class FinancialAgentsGraph:
         return node
 
     def _create_dividend_node(self):
-        """创建红利股分析节点"""
-        from src.agents.analysis.dividend_stock_agent import create_dividend_analysis
-        return create_dividend_analysis(self.llm)
+        """创建红利股分析节点（skill 调用）。"""
+        def node(state):
+            from src.skills import run_skill
+            return run_skill("dividend", state, self.llm)
+        return node
 
     def _create_fundamental_node(self):
         """创建基本面分析节点"""
