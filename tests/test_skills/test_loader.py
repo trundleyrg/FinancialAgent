@@ -14,9 +14,11 @@ def test_discover_skills_finds_four_skills():
 
 
 def test_run_skill_dispatches_to_correct_module():
+    """run_skill 必须正确分发到对应模块；缺 company_name 时返回 error_msg。"""
     from src.skills import run_skill
     delta = run_skill("cyclical", {"company_name": None}, llm=None)
-    assert delta == {}  # 空 skill 当前返回空字典
+    # 已迁移的 skill 在缺公司信息时返回 {"cyclical_analysis": None, "error_msg": ...}
+    assert delta == {"cyclical_analysis": None, "error_msg": "缺少公司信息"}
 
 
 def test_run_skill_unknown_raises_keyerror():

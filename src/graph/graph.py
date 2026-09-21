@@ -28,7 +28,6 @@ from src.graph.coordinator_nodes import (
     fetch_capital_changes_node,
 )
 from src.agents.analysis import (
-    create_cyclical_analysis,
     create_fundamental_analysis,
     create_summary_agent
 )
@@ -89,8 +88,9 @@ def create_financial_agent_graph(llm: Any) -> StateGraph:
     graph.add_node("extract_financial_data", create_extract_financial_data_node())
     graph.add_node("save_to_database", create_save_to_database_node())
 
-    # 添加分析 Agent 节点
-    graph.add_node("run_cyclical_analysis", create_cyclical_analysis(llm))
+    # 添加分析 Agent 节点（cyclical 已迁入 skill，其他仍走原 agent 工厂）
+    from src.skills import run_skill
+    graph.add_node("run_cyclical_analysis", lambda s: run_skill("cyclical", s, llm))
     graph.add_node("run_fundamental_analysis", create_fundamental_analysis(llm))
     graph.add_node("run_summary", create_summary_agent(llm))
 
@@ -200,8 +200,11 @@ class FinancialAgentsGraph:
         self.graph = self._build_graph()
 
     def _create_cyclical_node(self):
-        """创建周期股分析节点"""
-        return create_cyclical_analysis(self.llm)
+        """创建周期股分析节点（skill 调用）。"""
+        def node(state):
+            from src.skills import run_skill
+            return run_skill("cyclical", state, self.llm)
+        return node
 
     def _create_dividend_node(self):
         """创建红利股分析节点"""
