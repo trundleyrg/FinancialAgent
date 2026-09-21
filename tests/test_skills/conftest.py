@@ -1,14 +1,5 @@
-"""tests/test_skills/ 共享 fixture。"""
-import pytest
+"""tests/test_skills/ 共享 fixture。
 
-
-# 注：mock_llm 供 Task 8 单元测试使用，Task 1 阶段尚无消费方。
-@pytest.fixture
-def mock_llm():
-    """返回固定 JSON 的 mock LLM。"""
-    class _Mock:
-        def invoke(self, *args, **kwargs):
-            class _Resp:
-                content = '{"ok": true}'
-            return _Resp()
-    return _Mock()
+注：test_<skill>_skill.py 中各 file-scoped stub_llm 自给自足，
+本文件暂无需共享 fixture。保留空 conftest 以备未来扩展。
+"""
