@@ -12,6 +12,7 @@ from langchain_core.prompts import ChatPromptTemplate
 
 from src.graph.state import FinancialState
 from src.skills._loader import read_skill_description
+from src.tools.skill_result_writer import save_skill_result
 
 logger = logging.getLogger("Skills.Summary")
 
@@ -83,6 +84,9 @@ def run(state: FinancialState, llm) -> Dict[str, Any]:
             "总结分析完成: %s, 综合评级: %s",
             company_name, result.get("combined_rating", "UNKNOWN"),
         )
+
+        # 持久化到 skill_analysis_results（失败仅日志，不影响返回）
+        save_skill_result("summary", state, result)
 
         return {
             "summary": result,

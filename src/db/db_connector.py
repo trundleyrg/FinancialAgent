@@ -24,7 +24,7 @@ from src.db.models import (
     ConsolidatedBalanceSheet, ParentCompanyBalanceSheet,
     ConsolidatedIncomeStatement, ParentCompanyIncomeStatement,
     ConsolidatedCashFlowStatement, ParentCompanyCashFlowStatement,
-    ShareStructure, CapitalChangeEvent
+    ShareStructure, CapitalChangeEvent, SkillAnalysisResult
 )
 from src.utils.logger import db_logger
 
@@ -315,6 +315,7 @@ class DatabaseConnector:
             ConsolidatedIncomeStatement, ParentCompanyIncomeStatement,
             ConsolidatedCashFlowStatement, ParentCompanyCashFlowStatement,
             ShareStructure, CapitalChangeEvent,
+            SkillAnalysisResult,
         ]
         
         for table in tables:

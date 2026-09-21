@@ -754,6 +754,34 @@ class CapitalChangeEvent(Model):
             (('stock_code', 'event_date'), False),
         )
 
+
+class SkillAnalysisResult(Model):
+    """各 skill 产出分析结果的统一持久化表。
+
+    设计目的：
+    - 不同 skill（dividend / cyclical / fundamental / summary）返回的 dict 结构差异较大，
+      用一张统一表 + payload_json 完整保留原始输出，比为每个 skill 建表更简洁。
+    - 关键 headine 字段（investment_rating / summary）单独列出来便于 SQL 过滤和聚合。
+    - 主索引 (stock_code, skill_name, report_year) 用于典型查询路径。
+    """
+    id = AutoField(primary_key=True)
+    skill_name = CharField(max_length=32, null=False, index=True)
+    company_name = CharField(max_length=255, null=True)
+    stock_code = CharField(max_length=20, null=True, index=True)
+    report_year = IntegerField(null=True, index=True)
+    report_period = CharField(max_length=10, null=True)
+    investment_rating = CharField(max_length=16, null=True)
+    summary = TextField(null=True)
+    payload_json = TextField(null=False)
+    created_at = DateTimeField(default=datetime.now)
+
+    class Meta:
+        database = db
+        table_name = 'skill_analysis_results'
+        indexes = (
+            (('stock_code', 'skill_name', 'report_year'), False),
+        )
+
 # --- 2. Pydantic V2 Models (用于结构化输出提取) ---
 
 class MetricItem(BaseModel):

@@ -47,6 +47,7 @@ from src.tools.calculation_tools import (
 )
 from src.tools.db_tools import get_all_financial_data
 from src.tools.market_data_tool import get_stock_market_data
+from src.tools.skill_result_writer import save_skill_result
 from src.db.db_connector import get_db
 
 logger = logging.getLogger("Skills.Dividend")
@@ -173,6 +174,9 @@ def run(state: FinancialState, llm) -> Dict[str, Any]:
             "红利股分析完成: %s, 评级: %s",
             company_name, result.get("investment_rating", "UNKNOWN"),
         )
+
+        # 持久化到 skill_analysis_results（失败仅日志，不影响返回）
+        save_skill_result("dividend", state, result)
 
         return {"dividend_analysis": result}
 
