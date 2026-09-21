@@ -91,6 +91,15 @@ class CapitalChangeEventRepository(BaseRepository):
         recent = [r for r in dividend_rows if _to_date(r.get("event_date")) and _to_date(r["event_date"]).year >= cutoff_year]
 
         cash_values = [float(r["cash_per_10_shares"]) for r in recent]
+
+        # 把 events 序列化成 JSON 安全：date/datetime → ISO 字符串
+        safe_events = []
+        for r in recent[:10]:
+            safe_events.append({
+                k: (v.isoformat() if isinstance(v, date) else v)
+                for k, v in r.items()
+            })
+
         result: Dict[str, Any] = {
             "stock_code": key.stock_code,
             "years": years,
@@ -99,7 +108,7 @@ class CapitalChangeEventRepository(BaseRepository):
             "average_cash_per_10_shares": round(sum(cash_values) / len(cash_values), 4) if cash_values else 0.0,
             "last_event_date": _to_date(recent[0]["event_date"]).isoformat() if recent else None,
             "last_cash_per_10_shares": cash_values[0] if cash_values else 0.0,
-            "events": recent[:10],
+            "events": safe_events,
             "error": None,
         }
         return result

@@ -12,9 +12,34 @@ from langchain_core.prompts import ChatPromptTemplate
 from src.graph.state import FinancialState
 from src.skills._loader import read_skill_description
 from src.skills.dividend.tools import (
+    compute_dividend_stability_years,
     extract_dividend_info,
     get_dividend_stats_with_fallback,
 )
+
+
+def _fetch_total_shares(
+    stock_code: str, year: int, period: str | None,
+) -> float | None:
+    """从 share_structure 表读 total_shares（股）。"""
+    if not stock_code:
+        return None
+    try:
+        row = get_db()._duckdb_conn.execute(
+            """
+            SELECT total_shares FROM share_structure
+            WHERE stock_code = ? AND report_year = ? AND report_period = ?
+            """,
+            [stock_code, year, period or "FY"],
+        ).fetchone()
+    except Exception:
+        return None
+    if row and row[0] is not None:
+        try:
+            return float(row[0])
+        except (TypeError, ValueError):
+            return None
+    return None
 from src.tools.calculation_tools import (
     calculate_liquidity,
     calculate_profitability,
@@ -22,6 +47,7 @@ from src.tools.calculation_tools import (
 )
 from src.tools.db_tools import get_all_financial_data
 from src.tools.market_data_tool import get_stock_market_data
+from src.db.db_connector import get_db
 
 logger = logging.getLogger("Skills.Dividend")
 
@@ -85,10 +111,30 @@ def run(state: FinancialState, llm) -> Dict[str, Any]:
             market_data = get_stock_market_data(stock_code)
             dividend_stats = get_dividend_stats_with_fallback(stock_code, years=5)
             dividend_info["market_dividend_stats"] = dividend_stats
-            dividend_info["pe_ratio"] = market_data.get("pe_ratio", 0.0)
-            dividend_info["pb_ratio"] = market_data.get("pb_ratio", 0.0)
-            dividend_info["current_price"] = market_data.get("current_price", 0.0)
-            dividend_info["market_cap"] = market_data.get("market_cap", 0.0)
+
+            # 扁平化：从 pe_pb_history 取最近一日的 close/pb，
+            # basic_info 不直接含 PE/PB/市值，置为 None 让 LLM 自行处理。
+            pe_pb_history = market_data.get("pe_pb_history") or []
+            latest = next(
+                (r for r in reversed(pe_pb_history) if isinstance(r, dict) and not r.get("error")),
+                None,
+            )
+            current_price = (latest or {}).get("close")
+            pb_ratio = (latest or {}).get("pb")
+            dividend_info["current_price"] = current_price
+            dividend_info["pb_ratio"] = pb_ratio
+            dividend_info["pe_ratio"] = None  # akshare get_stock_pe_pb_history 不返回 PE
+            dividend_info["market_cap"] = None  # 同上
+
+            # 总股本从 share_structure 取（缺失时 dividend_yield 无法准确算）
+            total_shares = _fetch_total_shares(stock_code, report_year, report_period)
+            dividend_info["total_shares"] = total_shares
+
+            # 连续分红年限：从 capital_change_events 反推
+            stability_years = compute_dividend_stability_years(
+                stock_code, report_year, report_period or "FY",
+            )
+            dividend_info["dividend_stability_years"] = stability_years
 
         analysis_metrics = {
             "profitability": profitability,
@@ -112,11 +158,16 @@ def run(state: FinancialState, llm) -> Dict[str, Any]:
         )
 
         # 6. 调用 LLM（JSON 输出）
+        # 把 system_msg / user_msg 套一层 {var} 模板，避免 ChatPromptTemplate
+        # 把 JSON 中的 {x: y} 当成占位符解析（f-string 嵌套字段报错）。
         chain = (
-            ChatPromptTemplate.from_messages([("system", system_msg), ("user", user_msg)])
+            ChatPromptTemplate.from_messages([
+                ("system", "{system}"),
+                ("human", "{user}"),
+            ])
             | llm | JsonOutputParser()
         )
-        result = chain.invoke({})
+        result = chain.invoke({"system": system_msg, "user": user_msg})
 
         logger.info(
             "红利股分析完成: %s, 评级: %s",
