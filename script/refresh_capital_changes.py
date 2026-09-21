@@ -16,7 +16,7 @@ sys.path.insert(0, str(project_root))
 
 from src.db import CapitalChangeEventRepository, ReportKey
 from src.db.db_connector import get_db
-from src.stock_tools.capital_change_fetcher import fetch_capital_change_events
+from src.tools.capital_change_fetcher import fetch_capital_change_events
 from src.utils.logger import manager
 
 logger = manager.get_logger("Script.RefreshCapitalChanges", "script.log")
