@@ -27,9 +27,6 @@ from src.graph.coordinator_nodes import (
     create_save_to_database_node,
     fetch_capital_changes_node,
 )
-from src.agents.analysis import (
-    create_summary_agent
-)
 from src.tools.stock_type_config import (
     STOCK_TYPES,
     classify_by_keywords,
@@ -87,11 +84,11 @@ def create_financial_agent_graph(llm: Any) -> StateGraph:
     graph.add_node("extract_financial_data", create_extract_financial_data_node())
     graph.add_node("save_to_database", create_save_to_database_node())
 
-    # 添加分析 Agent 节点（cyclical / fundamental 已迁入 skill，其他仍走原 agent 工厂）
+    # 添加分析 Agent 节点（cyclical / dividend / fundamental / summary 均已迁入 skill，统一通过 run_skill 分发）
     from src.skills import run_skill
     graph.add_node("run_cyclical_analysis", lambda s: run_skill("cyclical", s, llm))
     graph.add_node("run_fundamental_analysis", lambda s: run_skill("fundamental", s, llm))
-    graph.add_node("run_summary", create_summary_agent(llm))
+    graph.add_node("run_summary", lambda s: run_skill("summary", s, llm))
 
     # 设置入口点
     graph.set_entry_point("check_data_availability")
@@ -220,8 +217,11 @@ class FinancialAgentsGraph:
         return node
 
     def _create_summary_node(self):
-        """创建总结节点"""
-        return create_summary_agent(self.llm)
+        """创建总结节点（skill 调用）。"""
+        def node(state):
+            from src.skills import run_skill
+            return run_skill("summary", state, self.llm)
+        return node
 
     def _build_graph(self) -> StateGraph:
         """构建状态图"""
