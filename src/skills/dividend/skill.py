@@ -176,7 +176,13 @@ def run(state: FinancialState, llm) -> Dict[str, Any]:
         )
 
         # 持久化到 skill_analysis_results（失败仅日志，不影响返回）
-        save_skill_result("dividend", state, result)
+        save_skill_result(
+            "dividend", state, result,
+            input_context={
+                "financial_data": financial_data,
+                "analysis_metrics": analysis_metrics,
+            },
+        )
 
         return {"dividend_analysis": result}
 

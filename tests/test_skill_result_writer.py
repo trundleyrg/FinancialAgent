@@ -108,6 +108,56 @@ def test_save_skill_result_handles_null_state_fields():
     assert ok is True
 
 
+def test_save_skill_result_writes_input_context():
+    """input_context dict 应被序列化为 JSON 存到 input_context 列。"""
+    state = {"stock_code": "000423", "report_year": 2024, "report_period": "FY"}
+    ctx = {
+        "financial_data": {"income_statement": {"net_profit": 1_000_000}},
+        "analysis_metrics": {"dividend_info": {"payout_ratio": 60.0}},
+    }
+    ok = save_skill_result("dividend", state, {"investment_rating": "BUY"}, input_context=ctx)
+    assert ok is True
+
+    conn = get_db()._duckdb_conn
+    row = conn.execute(
+        "SELECT input_context FROM skill_analysis_results WHERE stock_code='000423' AND skill_name='dividend' ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    assert row is not None
+    parsed = json.loads(row[0])
+    assert parsed["financial_data"]["income_statement"]["net_profit"] == 1_000_000
+    assert parsed["analysis_metrics"]["dividend_info"]["payout_ratio"] == 60.0
+
+
+def test_save_skill_result_input_context_optional():
+    """不传 input_context 时列为 NULL（向后兼容）。"""
+    state = {"stock_code": "000423"}
+    save_skill_result("dividend", state, {"investment_rating": "HOLD"})
+    conn = get_db()._duckdb_conn
+    row = conn.execute(
+        "SELECT input_context FROM skill_analysis_results WHERE stock_code='000423' AND skill_name='dividend' ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    assert row[0] is None
+
+
+def test_save_skill_result_input_context_json_queryable():
+    """DuckDB json_extract_string 可直接 SQL 溯源 input_context。"""
+    state = {"stock_code": "000423", "report_year": 2024}
+    save_skill_result(
+        "dividend", state, {"investment_rating": "BUY"},
+        input_context={"dividend_info": {"payout_ratio": 75.5, "fcf_coverage": 1.2}},
+    )
+    conn = get_db()._duckdb_conn
+    payout = conn.execute(
+        """
+        SELECT json_extract_string(input_context, '$.dividend_info.payout_ratio')
+        FROM skill_analysis_results
+        WHERE stock_code='000423' AND skill_name='dividend'
+        ORDER BY id DESC LIMIT 1
+        """
+    ).fetchone()[0]
+    assert float(payout) == 75.5
+
+
 # ----- save_skill_result_from_delta -----
 
 def test_save_skill_result_from_delta_dividend_pattern():

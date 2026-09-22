@@ -773,6 +773,9 @@ class SkillAnalysisResult(Model):
     investment_rating = CharField(max_length=16, null=True)
     summary = TextField(null=True)
     payload_json = TextField(null=False)
+    # LLM 输入上下文（财务数据 + 分析指标 + SKILL.md 指令的 JSON），
+    # 便于 SQL 溯源「结论是基于哪些数据得出的」。
+    input_context = TextField(null=True)
     created_at = DateTimeField(default=datetime.now)
 
     class Meta:

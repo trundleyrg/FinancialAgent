@@ -86,6 +86,7 @@ def save_skill_result(
     skill_name: str,
     state: Dict[str, Any],
     result: Dict[str, Any],
+    input_context: Optional[Dict[str, Any]] = None,
 ) -> bool:
     """把 skill 输出写入 skill_analysis_results 表。
 
@@ -93,6 +94,8 @@ def save_skill_result(
         skill_name: 'dividend' / 'cyclical' / 'fundamental' / 'summary'
         state:      FinancialState dict（含 company_name / stock_code / report_year / report_period）
         result:     skill 产出的 dict；为空或非 dict 时直接返回 False（不算错）
+        input_context:  LLM 输入上下文（财务数据 + 分析指标的 dict），用于 SQL 溯源；
+                        传 None 时 input_context 列存 NULL（向后兼容）
 
     Returns:
         True  写入成功
@@ -102,16 +105,12 @@ def save_skill_result(
         logger.debug("跳过保存：%s result 为空或非 dict", skill_name)
         return False
 
-    row = {
-        "skill_name": skill_name,
-        "company_name": state.get("company_name"),
-        "stock_code": state.get("stock_code"),
-        "report_year": state.get("report_year"),
-        "report_period": state.get("report_period"),
-        "investment_rating": _extract_rating(result),
-        "summary": _extract_summary(result),
-        "payload_json": _safe_json_dumps(result),
-    }
+    payload_json = _safe_json_dumps(result)
+    input_context_json = (
+        _safe_json_dumps(input_context)
+        if input_context is not None
+        else None
+    )
 
     try:
         conn = get_db()._duckdb_conn
@@ -119,24 +118,32 @@ def save_skill_result(
             """
             INSERT INTO skill_analysis_results
                 (skill_name, company_name, stock_code, report_year, report_period,
-                 investment_rating, summary, payload_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                 investment_rating, summary, payload_json, input_context)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
-                row["skill_name"], row["company_name"], row["stock_code"],
-                row["report_year"], row["report_period"],
-                row["investment_rating"], row["summary"], row["payload_json"],
+                skill_name,
+                state.get("company_name"),
+                state.get("stock_code"),
+                state.get("report_year"),
+                state.get("report_period"),
+                _extract_rating(result),
+                _extract_summary(result),
+                payload_json,
+                input_context_json,
             ],
         )
         logger.info(
-            "写入 skill_analysis_results: skill=%s stock=%s year=%s rating=%s",
-            skill_name, row["stock_code"], row["report_year"], row["investment_rating"],
+            "写入 skill_analysis_results: skill=%s stock=%s year=%s rating=%s ctx=%s",
+            skill_name, state.get("stock_code"), state.get("report_year"),
+            _extract_rating(result),
+            "yes" if input_context_json else "no",
         )
         return True
     except Exception as exc:
         logger.error(
             "写入 skill_analysis_results 失败 (skill=%s stock=%s): %s",
-            skill_name, row.get("stock_code"), exc,
+            skill_name, state.get("stock_code"), exc,
         )
         return False
 
@@ -145,6 +152,7 @@ def save_skill_result_from_delta(
     skill_name: str,
     state: Dict[str, Any],
     delta: Dict[str, Any],
+    input_context: Optional[Dict[str, Any]] = None,
 ) -> bool:
     """从 skill run() 返回的 delta 自动定位 `<skill>_analysis` key。
 
@@ -172,4 +180,4 @@ def save_skill_result_from_delta(
     if result is None:
         logger.debug("跳过保存：%s delta 中未找到分析 dict", skill_name)
         return False
-    return save_skill_result(skill_name, state, result)
+    return save_skill_result(skill_name, state, result, input_context=input_context)
