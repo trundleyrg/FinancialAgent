@@ -14,6 +14,7 @@ from src.skills._loader import read_skill_description
 from src.skills.dividend.tools import (
     compute_dividend_stability_years,
     extract_dividend_info,
+    filter_financial_data,
     get_dividend_stats_with_fallback,
 )
 
@@ -146,9 +147,12 @@ def run(state: FinancialState, llm) -> Dict[str, Any]:
         }
 
         # 5. 拼装 prompt（SKILL.md 指令 + 财务数据 + 分析指标）
+        # 财务数据先 filter 到 dividend 真正消费的字段 (~22 个)，
+        # 避免送入全量 230 字段（MiniMax M3.1-Flash-Preview 会在大 prompt 下静默回空）。
+        filtered_fd = filter_financial_data(financial_data)
         system_msg = (
             _INSTRUCTION
-            + "\n\n## 财务数据\n" + json.dumps(financial_data, ensure_ascii=False, indent=2)
+            + "\n\n## 财务数据\n" + json.dumps(filtered_fd, ensure_ascii=False, indent=2)
             + "\n\n## 分析指标\n" + json.dumps(analysis_metrics, ensure_ascii=False, indent=2)
         )
         user_msg = _USER_PROMPT.format(
@@ -168,7 +172,29 @@ def run(state: FinancialState, llm) -> Dict[str, Any]:
             ])
             | llm | JsonOutputParser()
         )
-        result = chain.invoke({"system": system_msg, "user": user_msg})
+        result = None
+        # 整链重试：MiniMax M3.1-Flash-Preview 偶发返回空 → JsonOutputParser
+        # 抛 OutputParserException（"Invalid json output"）。链级重试可覆盖
+        # LLM 层 4 次空响应仍未恢复的情况。
+        import time as _time
+        for _chain_attempt in range(3):
+            try:
+                result = chain.invoke({"system": system_msg, "user": user_msg})
+                break
+            except Exception as chain_exc:
+                if "Invalid json output" in str(chain_exc) and _chain_attempt < 2:
+                    _time.sleep(1.5)
+                    continue
+                raise chain_exc
+
+        # 兜底：MiniMax 在缺估值数据时倾向回 null investment_rating，
+        # 此处补默认 HOLD 并在 reasoning 末尾加备注，便于 SQL 检索。
+        if not result.get("investment_rating"):
+            result["investment_rating"] = "HOLD"
+            result.setdefault("reasoning", "")
+            result["reasoning"] = (
+                result["reasoning"] + " [自动兜底：缺估值/股息率数据，默认 HOLD]"
+            ).strip()
 
         logger.info(
             "红利股分析完成: %s, 评级: %s",

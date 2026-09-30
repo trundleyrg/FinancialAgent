@@ -10,6 +10,45 @@ from src.tools.market_data_tool import get_dividend_stats
 logger = logging.getLogger("Skills.Dividend")
 
 
+# dividend skill 真正消费的所有字段（来自 extract_dividend_info +
+# calculate_profitability/liquidity/solvency）。送进 LLM prompt 前用
+# filter_financial_data 过滤掉无关字段以减小体积 — MiniMax M3.1-Flash-Preview
+# 在 sys prompt 含全量 230 字段时会静默回空响应（~10K 字符触发），过滤后通常 < 2K。
+DIVIDEND_RELEVANT_FIELDS: Dict[str, list] = {
+    "balance_sheet": [
+        "total_assets", "total_liabilities",
+        "total_owners_equity", "total_equity",
+        "current_assets", "current_liabilities",
+        "monetary_funds", "inventory",
+    ],
+    "income_statement": [
+        "operating_revenue",
+        "gross_profit", "operating_costs", "operating_cost",
+        "net_profit", "net_profit_attributable_to_parent", "total_profit",
+        "operating_profit", "ebit",
+        "interest_expense", "financial_expenses", "equity",
+    ],
+    "cash_flow": [
+        "net_cash_from_operations", "operating_cash_flow",
+        "cash_for_dividend_and_interest",
+        "cash_for_fixed_assets",
+    ],
+}
+
+
+def filter_financial_data(financial_data: Dict[str, Any]) -> Dict[str, Any]:
+    """把全量财务数据过滤到 dividend skill 真正消费的字段。
+
+    保留 None 值字段（None 会序列化为 null，便于 LLM 看出字段缺失）；
+    完全缺失的字段则不写入 dict。
+    """
+    result: Dict[str, Any] = {}
+    for table, fields in DIVIDEND_RELEVANT_FIELDS.items():
+        raw = financial_data.get(table) or {}
+        result[table] = {k: raw.get(k) for k in fields if k in raw}
+    return result
+
+
 def _pick_net_profit(income_statement: Dict[str, Any]) -> float:
     """净利润字段在 PDF 中常用别名：net_profit / net_profit_attributable_to_parent / total_profit。
 

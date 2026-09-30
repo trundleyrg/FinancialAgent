@@ -67,7 +67,31 @@ class AIClient:
         if self.api_base:
             llm_params["base_url"] = self.api_base
 
-        self.llm = ChatOpenAI(**llm_params)
+        base_llm = ChatOpenAI(**llm_params)
+        # 包装 self.llm：MiniMax M3.1-Flash-Preview 偶发空响应；
+        # RunnableLambda 让 chain (prompt | llm | parser) 在 invoke 时自动重试。
+        from langchain_core.runnables import RunnableLambda
+        import time
+        max_retries = 3
+
+        def _retry_invoke(messages, **kwargs):
+            last_resp = None
+            for attempt in range(max_retries + 1):
+                try:
+                    resp = base_llm.invoke(messages, **kwargs)
+                    content = getattr(resp, "content", "") or ""
+                    if content:
+                        return resp
+                    last_resp = resp
+                except Exception as exc:
+                    last_resp = exc
+                    if attempt == max_retries:
+                        raise
+                if attempt < max_retries:
+                    time.sleep(1.0)
+            return last_resp
+
+        self.llm = RunnableLambda(_retry_invoke)
 
     def chat(
         self,
@@ -102,21 +126,29 @@ class AIClient:
         if "stop" in kwargs:
             call_params["stop"] = kwargs["stop"]
 
-        # 调用 LangChain LLM
-        try:
-            response = self.llm.invoke(langchain_messages, **call_params)
-
-            # 提取响应内容（langchain 1.x 的 ChatOpenAI.invoke() 返回 AIMessage）
-            content = response.content if hasattr(response, 'content') else str(response)
-
-            return content or ""
-        except TimeoutError as e:
-            return f"请求超时，请稍后重试: {str(e)}"
-        except Exception as e:
-            error_msg = str(e)
-            if "timeout" in error_msg.lower() or "timed out" in error_msg.lower():
-                return f"请求超时，请稍后重试: {error_msg}"
-            return f"AI 调用失败: {error_msg}"
+        # 调用 LangChain LLM；空响应时重试（MiniMax M3.1-Flash-Preview
+        # 偶发返回空 — 冷启动 / 上游临时问题）
+        max_empty_retries = 3
+        for attempt in range(max_empty_retries + 1):
+            try:
+                response = self.llm.invoke(langchain_messages, **call_params)
+                content = response.content if hasattr(response, 'content') else str(response)
+                if content:
+                    return content
+                # 空响应：等 1s 后重试
+                if attempt < max_empty_retries:
+                    import time
+                    time.sleep(1.0)
+                    continue
+                return ""
+            except TimeoutError as e:
+                return f"请求超时，请稍后重试: {str(e)}"
+            except Exception as e:
+                error_msg = str(e)
+                if "timeout" in error_msg.lower() or "timed out" in error_msg.lower():
+                    return f"请求超时，请稍后重试: {error_msg}"
+                return f"AI 调用失败: {error_msg}"
+        return ""
 
     def _convert_messages(self, messages: List[Dict[str, str]]) -> List[BaseMessage]:
         """

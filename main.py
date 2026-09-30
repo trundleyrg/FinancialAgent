@@ -97,7 +97,7 @@ def main():
             process_pdf_file(str(pdf_file))
         except Exception as e:
             main_logger.error(f"处理文件 {pdf_file} 时发生未预期错误: {str(e)}")
-            raise
+            continue
 
     main_logger.info("PDF 文件处理完成！")
 
