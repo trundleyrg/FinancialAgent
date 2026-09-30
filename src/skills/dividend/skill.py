@@ -46,7 +46,7 @@ from src.tools.calculation_tools import (
     calculate_profitability,
     calculate_solvency,
 )
-from src.tools.db_tools import get_all_financial_data
+from src.tools.db_tools import get_all_financial_data, get_multi_year_financial_data
 from src.tools.market_data_tool import get_stock_market_data
 from src.tools.skill_result_writer import save_skill_result
 from src.db.db_connector import get_db
@@ -63,15 +63,31 @@ _USER_PROMPT = (
     "\n请基于以上信息与下方财务/分析指标，给出详细的红利股分析报告。"
 )
 
+# 多年度财务趋势窗口（向 LLM 提供的近 N 年关键指标时间序列）。
+# - 默认 5 年（与「连续分红年限」口径一致）。
+# - 可被环境变量 DIVIDEND_TREND_YEARS 覆盖，便于在 CI / smoke test 中换窗口。
+# - run() 形参 trend_years 优先级最高，传 None 时回落到此值。
+import os
+DEFAULT_TREND_YEARS = int(os.environ.get("DIVIDEND_TREND_YEARS", "5"))
+
 DESCRIPTION = read_skill_description(SKILL_DIR / "SKILL.md")
 
 
-def run(state: FinancialState, llm) -> Dict[str, Any]:
+def run(
+    state: FinancialState,
+    llm,
+    trend_years: int | None = None,
+) -> Dict[str, Any]:
     """红利股分析 skill；返回 state delta。
 
     字段语义与原 `create_dividend_analysis(llm)` 节点保持一致：
     - 成功：`{"dividend_analysis": <dict>}`
     - 失败：`{"dividend_analysis": None, "error_msg": "..."}`
+
+    Args:
+        state: FinancialState（必传）。
+        llm: 已构造好的 LangChain LLM 实例。
+        trend_years: 多年财务时间序列窗口长度。None / 缺省 → DEFAULT_TREND_YEARS (默认 5)。
     """
     company_name = state.get("company_name")
     stock_code = state.get("stock_code")
@@ -82,9 +98,13 @@ def run(state: FinancialState, llm) -> Dict[str, Any]:
         logger.error("缺少公司信息，无法进行红利股分析")
         return {"dividend_analysis": None, "error_msg": "缺少公司信息"}
 
+    years_window = trend_years if trend_years is not None else DEFAULT_TREND_YEARS
+    if years_window < 1:
+        years_window = 1
+
     logger.info(
-        "开始红利股分析: %s (%s) %s %s",
-        company_name, stock_code, report_year, report_period,
+        "开始红利股分析: %s (%s) %s %s trend_years=%d",
+        company_name, stock_code, report_year, report_period, years_window,
     )
 
     try:
@@ -98,6 +118,37 @@ def run(state: FinancialState, llm) -> Dict[str, Any]:
         balance_sheet = financial_data.get("balance_sheet", {})
         income_statement = financial_data.get("income_statement", {})
         cash_flow = financial_data.get("cash_flow", {})
+
+        # 1b. 近 N 年财务时间序列（用于看趋势）；缺失年份键缺失，不抛错。
+        # prompt 里只塞关键字段（营收/净利/经营现金流/分红现金支出/总资产），
+        # 避免大 prompt 触发 MiniMax M3.1-Flash-Preview 静默回空。
+        multi_year_raw: Dict[str, Any] = {}
+        multi_year_summary: Dict[str, Dict[str, Any]] = {}
+        try:
+            multi_year_raw = get_multi_year_financial_data(
+                company_name=company_name,
+                start_year=report_year - (years_window - 1),
+                end_year=report_year,
+                period=report_period or "FY",
+            )
+            for y, stmts in multi_year_raw.items():
+                inc = stmts.get("consolidated_income_statement") or {}
+                cf = stmts.get("consolidated_cash_flow_statement") or {}
+                bs = stmts.get("consolidated_balance_sheet") or {}
+                multi_year_summary[y] = {
+                    "operating_revenue": inc.get("operating_revenue"),
+                    "net_profit": inc.get("net_profit")
+                        or inc.get("net_profit_attributable_to_parent")
+                        or inc.get("total_profit"),
+                    "net_cash_from_operations":
+                        cf.get("net_cash_from_operations")
+                        or cf.get("operating_cash_flow"),
+                    "cash_for_dividend_and_interest":
+                        cf.get("cash_for_dividend_and_interest"),
+                    "total_assets": bs.get("total_assets"),
+                }
+        except Exception as exc:
+            logger.warning("多年财务数据拉取失败 (%s): %s", company_name, exc)
 
         # 2. 计算分析指标
         profitability = calculate_profitability(income_statement, balance_sheet)
@@ -144,16 +195,21 @@ def run(state: FinancialState, llm) -> Dict[str, Any]:
             "solvency": solvency,
             "dividend_info": dividend_info,
             "market_data": market_data,
+            "multi_year_summary": multi_year_summary,
         }
 
-        # 5. 拼装 prompt（SKILL.md 指令 + 财务数据 + 分析指标）
+        # 5. 拼装 prompt（SKILL.md 指令 + 财务数据 + 分析指标 + 多年度趋势）
         # 财务数据先 filter 到 dividend 真正消费的字段 (~22 个)，
         # 避免送入全量 230 字段（MiniMax M3.1-Flash-Preview 会在大 prompt 下静默回空）。
         filtered_fd = filter_financial_data(financial_data)
         system_msg = (
             _INSTRUCTION
-            + "\n\n## 财务数据\n" + json.dumps(filtered_fd, ensure_ascii=False, indent=2)
-            + "\n\n## 分析指标\n" + json.dumps(analysis_metrics, ensure_ascii=False, indent=2)
+            + "\n\n## 财务数据（" + str(report_year) + "）\n"
+            + json.dumps(filtered_fd, ensure_ascii=False, indent=2)
+            + "\n\n## 分析指标\n"
+            + json.dumps(analysis_metrics, ensure_ascii=False, indent=2)
+            + "\n\n## 多年度财务趋势（近 5 年，单位：人民币元）\n"
+            + json.dumps(multi_year_summary, ensure_ascii=False, indent=2)
         )
         user_msg = _USER_PROMPT.format(
             company_name=company_name,
@@ -207,6 +263,7 @@ def run(state: FinancialState, llm) -> Dict[str, Any]:
             input_context={
                 "financial_data": financial_data,
                 "analysis_metrics": analysis_metrics,
+                "multi_year_raw": multi_year_raw,
             },
         )
 

@@ -42,7 +42,12 @@ class AIClient:
         self.api_key = config.get("API_KEY") or os.environ.get("API_KEY", "")
         self.api_base = config.get("API_BASE") or os.environ.get("AI_API_BASE", "")
         self.temperature = config.get("TEMPERATURE", 0.7)
-        self.max_tokens = config.get("MAX_TOKENS", 4096)
+        # 默认 16384 — MiniMax M3.1-Flash-Preview 是 reasoning model，
+        # completion_tokens 里 reasoning_tokens 与可见 content 共享同一上限；
+        # 4096/8192 下 reasoning 会耗光预算、finish_reason=length、content=0，
+        # 触发 JsonOutputParser Invalid json output。16384 是经验证能稳定
+        # 拿到 content 的下限。普通 chat model 可以传更小的 MAX_TOKENS 覆盖。
+        self.max_tokens = config.get("MAX_TOKENS", 16384)
         self.timeout = config.get("TIMEOUT", 120)
         self.max_retries = config.get("MAX_RETRIES", 3)
 
