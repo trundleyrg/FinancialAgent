@@ -424,37 +424,72 @@ def get_stock_market_data(stock_code: str) -> Dict[str, Any]:
     """
     获取股票综合市场数据，供 analysis agents 使用。
 
-    该函数历史上由其他模块导入（`src.agents.analysis.*`）但目前
-    `market_data_tool` 中没有同名实现。为兼容遗留调用，本函数合并
-    `get_stock_basic_info` 与 `get_stock_pe_pb_history` 的输出，
-    并对底层 akshare 接口异常做兜底：
+    数据来源优先级：
+    1. 本地 stock_market_snapshot 表（最近一次写入的快照，含收盘价/PE/PB/总市值）。
+       2026-09 起雪球 stock_individual_basic_info_xq 与东财 stock_zh_a_hist 频繁断连，
+       DB 快照让 skill 在外网挂掉时仍能拿到一份估值。
+    2. akshare 实时（basic_info + pe_pb_history），全失败则 error 字段记录原因。
 
-    - 当 akshare 返回结构异常（如 `KeyError: 'data'`）时，
-      返回只包含 `error` 与空数据字段的字典，不抛出异常；
-    - 调用方应当检查返回值中的 `error` 字段来判断数据是否可用。
+    返回值结构兼容旧版调用方（dividend skill 会从 pe_pb_history[-1] 取 close/pb，
+    从 basic_info 取公司信息）。
     """
+    code = _normalize_stock_code(stock_code)
     fallback: Dict[str, Any] = {
-        "stock_code": _normalize_stock_code(stock_code),
+        "stock_code": code,
         "basic_info": {},
         "pe_pb_history": [],
         "error": None,
     }
+
+    # 1) DB 快照（最近一次）
+    try:
+        from src.tools.stock_market_snapshot_fetcher import load_latest_snapshot
+        snap = load_latest_snapshot(code)
+        if snap:
+            # 把 DB 快照注入到 pe_pb_history 的最后一行，让下游"取最近一日"
+            # 的逻辑继续生效。close_price / pb / pe 全部用快照值。
+            from datetime import date as _date
+            history = fallback["pe_pb_history"]
+            history.append({
+                "date": snap.get("snapshot_date") or _date.today().isoformat(),
+                "close": snap.get("close_price"),
+                "pb": snap.get("pb_ratio"),
+                "pe": snap.get("pe_ratio"),
+                "market_cap": snap.get("total_market_cap"),
+                "source": f"db:{snap.get('source')}",
+            })
+            fallback["pe_pb_history"] = history
+            # 同时把快照源写入 basic_info（下游 skill 会读 market_cap 等）
+            if snap.get("total_market_cap") is not None:
+                fallback["basic_info"]["total_mv"] = snap["total_market_cap"]
+            fallback["basic_info"]["_snapshot_source"] = snap.get("source")
+    except Exception as exc:
+        logger.debug("加载 DB 行情快照失败 %s: %s", code, exc)
+
+    # 2) akshare 实时（失败不抛，仅记 error）
     try:
         basic = get_stock_basic_info(stock_code)
-        fallback["basic_info"] = basic
+        # basic_info 里已有 _snapshot_source 时不要覆盖公司名/主营等信息；
+        # error 字段不进 basic_info，集中在 fallback["error"] 表达。
+        for k, v in (basic or {}).items():
+            if k.startswith("_") or k == "error":
+                continue
+            fallback["basic_info"].setdefault(k, v)
         if isinstance(basic, dict) and basic.get("error"):
-            fallback["error"] = basic["error"]
+            if fallback.get("error") is None:
+                fallback["error"] = basic["error"]
     except Exception as e:  # pragma: no cover - 防御性兜底
         logger.error("获取股票基础信息失败 %s: %s", stock_code, e)
-        fallback["error"] = str(e)
-        fallback["basic_info"] = {}
+        if fallback.get("error") is None:
+            fallback["error"] = str(e)
 
     try:
-        fallback["pe_pb_history"] = get_stock_pe_pb_history(stock_code)
+        # 仅在 DB 快照缺失时才走 akshare 历史接口
+        if not fallback["pe_pb_history"]:
+            fallback["pe_pb_history"] = get_stock_pe_pb_history(stock_code)
     except Exception as e:  # pragma: no cover - 防御性兜底
         logger.error("获取PE/PB历史失败 %s: %s", stock_code, e)
         if fallback.get("error") is None:
             fallback["error"] = str(e)
-        fallback["pe_pb_history"] = []
 
     return fallback

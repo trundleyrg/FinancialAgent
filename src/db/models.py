@@ -785,6 +785,46 @@ class SkillAnalysisResult(Model):
             (('stock_code', 'skill_name', 'report_year'), False),
         )
 
+
+class StockMarketSnapshot(Model):
+    """行情估值快照表。
+
+    设计目的：akshare 行情接口（雪球 stock_individual_basic_info_xq、
+    东财 stock_zh_a_hist、百度 stock_zh_valuation_baidu）在 2026-09 频繁断连
+    (KeyError: 'data' / RemoteDisconnected)，导致 skill 端 market_data
+    全为 None、prompt 残缺。把每次成功抓到的「最新一个交易日」的
+    收盘价 / PE / PB / 总市值 落到本地，让 skill 在外网挂掉时仍然能从
+    表里读到最近一次缓存的估值。
+
+    字段：
+    - snapshot_date: 这一行数据对应的交易日；同一 stock_code + snapshot_date 唯一。
+    - close_price / pe_ratio / pb_ratio / total_market_cap: 全部允许 NULL（来源接口
+      可能只返回其中一部分）。
+    - source: 哪个接口/脚本写入（akshare_em / akshare_xq / baidu / manual）。
+
+    抓取脚本：`scripts/refresh_stock_market_snapshot.py`。
+    """
+    id = AutoField(primary_key=True)
+    stock_code = CharField(max_length=20, null=False, index=True)
+    snapshot_date = DateField(null=False, index=True)
+
+    close_price = FloatField(null=True, help_text="收盘价(元)")
+    pe_ratio = FloatField(null=True, help_text="市盈率 TTM")
+    pb_ratio = FloatField(null=True, help_text="市净率")
+    total_market_cap = FloatField(null=True, help_text="总市值(元)")
+
+    source = CharField(max_length=32, null=False)
+    created_at = DateTimeField(default=datetime.now)
+
+    class Meta:
+        database = db
+        table_name = 'stock_market_snapshot'
+        indexes = (
+            (('stock_code', 'snapshot_date'), True),  # UNIQUE
+            (('stock_code', 'created_at'), False),
+        )
+
+
 # --- 2. Pydantic V2 Models (用于结构化输出提取) ---
 
 class MetricItem(BaseModel):
