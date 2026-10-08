@@ -185,7 +185,7 @@ def _draw_subplot(
     if n == 1:
         axes = [axes]
     periods = sorted(series.keys())
-    for ax, metric in zip(axes, metrics):
+    for ax, metric in zip(axes, metrics, strict=True):
         values = [series[p].get(metric) for p in periods]
         ax.plot(periods, values, marker="o")
         display_metric = (series_labels or {}).get(metric, metric)
@@ -211,10 +211,19 @@ def plot_multi_series_trend(
 ) -> Path:
     """把 {period: {metric: value}} 渲染成趋势图 PNG。
 
-    layout 规则:
-    - 1 指标 -> single
-    - 2 指标 -> twinx (左右两个 Y 轴,左实线 / 右虚线)
-    - 3+ 指标 -> subplot (上下堆叠,共享 X 轴)
+    Args:
+        series: 嵌套 dict,外层 key=period(如 "2021"),内层 key=metric(如 "营收")。
+        x_label: X 轴标签,默认 "年份"。
+        y_label: Y 轴标签(仅 single 布局生效);其它布局每图自带 Y 轴。
+        series_labels: 把内部 metric 名映射到显示名;仅改 label,不改值。
+        title: 整图标题(single/twinx 用 ax.set_title,subplot 用 fig.suptitle)。
+        output_path: 写入 PNG 的路径;父目录不存在会自动创建。
+        figsize: (width, height) 英寸;subplot 模式按面板数纵向叠加。
+        value_formatter: 预留参数(当前未挂到画图路径上)。
+        layout: "auto"(1→single / 2→twinx / 3+→subplot)或显式覆盖。
+
+    Returns:
+        Path: 写入 PNG 的路径(与 output_path 相同对象)。
     """
     if not series:
         raise ValueError("series is empty")

@@ -1,9 +1,17 @@
 """Tests for src/tools/visualization.py."""
 from __future__ import annotations
 
-import matplotlib
+from pathlib import Path
 
-from src.tools.visualization import _apply_cjk_font, _CJK_FONT_CANDIDATES
+import matplotlib
+import pytest
+
+from src.tools.visualization import (
+    _CJK_FONT_CANDIDATES,
+    _apply_cjk_font,
+    build_trend_table,
+    plot_multi_series_trend,
+)
 
 
 def test_apply_cjk_font_sets_unicode_minus_false():
@@ -13,9 +21,6 @@ def test_apply_cjk_font_sets_unicode_minus_false():
 
 def test_cjk_font_candidates_includes_fallback():
     assert "DejaVu Sans" in _CJK_FONT_CANDIDATES
-
-
-from src.tools.visualization import build_trend_table
 
 
 def test_build_trend_table_basic():
@@ -54,15 +59,6 @@ def test_build_trend_table_series_labels_renames_columns():
     df = build_trend_table(series, series_labels={"营收": "营业收入(亿元)"})
     assert "营业收入(亿元)" in df.columns
     assert "营收" not in df.columns
-
-
-import os
-import tempfile
-from pathlib import Path
-
-import pytest
-
-from src.tools.visualization import plot_multi_series_trend
 
 
 def test_plot_single_metric_returns_path(tmp_path):
@@ -114,4 +110,20 @@ def test_plot_creates_parent_dirs(tmp_path):
     series = {"2021": {"营收": 38.5e8}, "2022": {"营收": 40.4e8}}
     out = tmp_path / "deep" / "dir" / "x.png"
     plot_multi_series_trend(series, output_path=out)
+    assert out.exists()
+
+
+def test_plot_with_title(tmp_path):
+    """1 指标 + title:触发 ax.set_title(single)分支。"""
+    series = {"2021": {"营收": 38.5e8}, "2022": {"营收": 40.4e8}}
+    out = tmp_path / "titled.png"
+    plot_multi_series_trend(series, output_path=out, title="测试标题")
+    assert out.exists()
+
+
+def test_plot_layout_subplot_with_single_metric(tmp_path):
+    """1 指标 + layout=subplot:触发 n==1 内层 list 化 axes 分支。"""
+    series = {"2021": {"营收": 38.5e8}, "2022": {"营收": 40.4e8}}
+    out = tmp_path / "subplot_one.png"
+    plot_multi_series_trend(series, output_path=out, layout="subplot")
     assert out.exists()
