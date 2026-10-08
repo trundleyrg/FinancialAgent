@@ -25,7 +25,9 @@ FinancialAgent/
 │   │   ├── __init__.py
 │   │   ├── general_pdf_parser.py     # 解析pdf，将正文保存为md，表格保存为md，图片保存为png
 │   │   ├── chapter_extractor.py      # 专门负责识别和提取 PDF 指定章节
-│   │   └── file_manager.py   # 负责 Markdown 生成和文件夹管理
+│   │   ├── file_manager.py           # 负责 Markdown 生成和文件夹管理
+│   │   ├── skill_result_writer.py    # skill 产出结果统一持久化
+│   │   └── visualization.py          # 通用多序列趋势图(PNG + DataFrame)
 │   ├── db/
 │   │   ├── __init__.py
 │   │   ├── db_connector.py   # 数据库操作逻辑 (Peewee ORM)
@@ -67,6 +69,32 @@ FinancialAgent/
 ├── mypy.ini                  # Mypy 配置
 └── pytest.ini                # pytest 配置
 ```
+
+## 可视化工具
+
+`src/tools/visualization.py` 提供 3 个公开 API:
+
+- `build_trend_table(series)` — 把 `{period: {metric: value}}` 展平成 DataFrame
+- `plot_multi_series_trend(series, output_path)` — 渲染 PNG 趋势图
+- `render_trend_chart_and_table(series, output_path)` — 一步到位（写图 + 返回表）
+
+按指标数量自动选择布局：1 → single，2 → twinx，3+ → subplot。
+
+最小示例：
+
+```python
+from src.tools.visualization import render_trend_chart_and_table
+
+series = {
+    "2021": {"营收": 38.5e8, "净利": 4.4e8, "分红率": 44.77},
+    "2022": {"营收": 40.4e8, "净利": 7.8e8, "分红率": 53.72},
+    # ...
+}
+chart_path, table = render_trend_chart_and_table(series, output_path="trend.png")
+table.to_csv("trend.csv")
+```
+
+详细文档与周期股复用指引见 [docs/visualization_usage.md](docs/visualization_usage.md)。
 
 ## 数据库查询层
 

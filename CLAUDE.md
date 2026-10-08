@@ -60,6 +60,8 @@ mypy src/
    - `chapter_extractor.py`: `PDFChapterExtractor` - 通过目录定位章节，提取跨页表格，关联表头
    - `general_pdf_parser.py`: 通用 PDF 解析器，用于文本、图片、表格
    - `download_cninfo_reports.py`: CNInfo 年报下载器，支持代码或名称查询
+   - `skill_result_writer.py`: 各 skill（dividend / cyclical / fundamental / summary）分析结果统一持久化到 `skill_analysis_results` 表；支持 `input_context` 字段保存 LLM 输入上下文
+   - `visualization.py`: 通用多序列趋势图 — `build_trend_table` / `plot_multi_series_trend` / `render_trend_chart_and_table`；按指标数自动 single/twinx/subplot 布局；中文字体兼容
 
 4. **Database** (`src/db/`) - 数据持久化
    - `db_connector.py`: `DatabaseConnector` 类 - PostgreSQL 和 DuckDB 的统一接口，提供 CRUD 操作
