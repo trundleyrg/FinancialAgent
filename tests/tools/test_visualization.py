@@ -54,3 +54,64 @@ def test_build_trend_table_series_labels_renames_columns():
     df = build_trend_table(series, series_labels={"营收": "营业收入(亿元)"})
     assert "营业收入(亿元)" in df.columns
     assert "营收" not in df.columns
+
+
+import os
+import tempfile
+from pathlib import Path
+
+import pytest
+
+from src.tools.visualization import plot_multi_series_trend
+
+
+def test_plot_single_metric_returns_path(tmp_path):
+    series = {"2021": {"营收": 38.5e8}, "2022": {"营收": 40.4e8}}
+    out = tmp_path / "single.png"
+    p = plot_multi_series_trend(series, output_path=out)
+    assert p == out
+    assert out.exists()
+    assert out.stat().st_size > 1000
+
+
+def test_plot_two_metrics_uses_twinx(tmp_path):
+    series = {
+        "2021": {"营收": 38.5e8, "净利": 4.4e8},
+        "2022": {"营收": 40.4e8, "净利": 7.8e8},
+    }
+    out = tmp_path / "twinx.png"
+    plot_multi_series_trend(series, output_path=out)
+    assert out.exists()
+
+
+def test_plot_three_metrics_uses_subplot(tmp_path):
+    series = {
+        "2021": {"营收": 38.5e8, "净利": 4.4e8, "分红率": 50.0},
+        "2022": {"营收": 40.4e8, "净利": 7.8e8, "分红率": 55.0},
+        "2023": {"营收": 47.2e8, "净利": 11.5e8, "分红率": 60.0},
+    }
+    out = tmp_path / "subplot.png"
+    plot_multi_series_trend(series, output_path=out)
+    assert out.exists()
+
+
+def test_plot_layout_explicit_subplot_forces_3_panels_even_with_2_metrics(tmp_path):
+    series = {
+        "2021": {"营收": 38.5e8, "净利": 4.4e8},
+        "2022": {"营收": 40.4e8, "净利": 7.8e8},
+    }
+    out = tmp_path / "force_sub.png"
+    plot_multi_series_trend(series, output_path=out, layout="subplot")
+    assert out.exists()
+
+
+def test_plot_empty_series_raises():
+    with pytest.raises(ValueError, match="empty"):
+        plot_multi_series_trend({}, output_path=Path("/tmp/x.png"))
+
+
+def test_plot_creates_parent_dirs(tmp_path):
+    series = {"2021": {"营收": 38.5e8}, "2022": {"营收": 40.4e8}}
+    out = tmp_path / "deep" / "dir" / "x.png"
+    plot_multi_series_trend(series, output_path=out)
+    assert out.exists()

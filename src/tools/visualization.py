@@ -7,9 +7,12 @@ render_trend_chart_and_table)由后续任务逐个追加到本文件。
 from __future__ import annotations
 
 import logging
-from typing import Callable
+from pathlib import Path
+from typing import Any, Callable, Literal
 
 import matplotlib
+import matplotlib.figure
+import matplotlib.pyplot as plt
 import pandas as pd
 
 logger = logging.getLogger("Tools.Visualization")
@@ -77,3 +80,169 @@ def build_trend_table(
     if value_formatter is not None:
         df = df.map(value_formatter)
     return df
+
+
+def _resolve_layout(
+    n_metrics: int,
+    layout: Literal["auto", "single", "twinx", "subplot"],
+) -> str:
+    """根据指标数 + 显式 layout 决定最终布局。"""
+    if layout != "auto":
+        return layout
+    if n_metrics == 1:
+        return "single"
+    if n_metrics == 2:
+        return "twinx"
+    return "subplot"
+
+
+def _all_metrics(series: dict[str, dict[str, float]]) -> list[str]:
+    """按各 period 首次出现顺序返回所有 metric。"""
+    seen: list[str] = []
+    for period in sorted(series.keys()):
+        for metric in series[period].keys():
+            if metric not in seen:
+                seen.append(metric)
+    return seen
+
+
+def _draw_single(
+    series: dict[str, dict[str, float]],
+    metrics: list[str],
+    *,
+    title: str | None,
+    x_label: str,
+    y_label: str | None,
+    series_labels: dict[str, str] | None,
+    figsize: tuple[float, float],
+) -> matplotlib.figure.Figure:
+    fig, ax = plt.subplots(figsize=figsize)
+    periods = sorted(series.keys())
+    metric = metrics[0]
+    values = [series[p].get(metric) for p in periods]
+    ax.plot(periods, values, marker="o")
+    display_metric = (series_labels or {}).get(metric, metric)
+    ax.set_ylabel(y_label if y_label else display_metric)
+    ax.set_xlabel(x_label)
+    if title:
+        ax.set_title(title)
+    ax.grid(True, alpha=0.3)
+    return fig
+
+
+def _draw_twinx(
+    series: dict[str, dict[str, float]],
+    metrics: list[str],
+    *,
+    title: str | None,
+    x_label: str,
+    series_labels: dict[str, str] | None,
+    figsize: tuple[float, float],
+) -> matplotlib.figure.Figure:
+    fig, ax_left = plt.subplots(figsize=figsize)
+    ax_right = ax_left.twinx()
+    periods = sorted(series.keys())
+
+    left_metric = metrics[0]
+    left_values = [series[p].get(left_metric) for p in periods]
+    ax_left.plot(periods, left_values, marker="o", color="tab:blue",
+                 label=(series_labels or {}).get(left_metric, left_metric))
+    ax_left.set_ylabel((series_labels or {}).get(left_metric, left_metric),
+                       color="tab:blue")
+    ax_left.tick_params(axis="y", labelcolor="tab:blue")
+
+    right_metric = metrics[1]
+    right_values = [series[p].get(right_metric) for p in periods]
+    ax_right.plot(periods, right_values, marker="s", linestyle="--",
+                  color="tab:orange",
+                  label=(series_labels or {}).get(right_metric, right_metric))
+    ax_right.set_ylabel((series_labels or {}).get(right_metric, right_metric),
+                        color="tab:orange")
+    ax_right.tick_params(axis="y", labelcolor="tab:orange")
+
+    ax_left.set_xlabel(x_label)
+    if title:
+        ax_left.set_title(title)
+    ax_left.grid(True, alpha=0.3)
+    return fig
+
+
+def _draw_subplot(
+    series: dict[str, dict[str, float]],
+    metrics: list[str],
+    *,
+    title: str | None,
+    x_label: str,
+    series_labels: dict[str, str] | None,
+    figsize_per_panel: tuple[float, float],
+) -> matplotlib.figure.Figure:
+    n = len(metrics)
+    fig, axes = plt.subplots(
+        n, 1,
+        figsize=(figsize_per_panel[0], figsize_per_panel[1] * n),
+        sharex=True,
+    )
+    if n == 1:
+        axes = [axes]
+    periods = sorted(series.keys())
+    for ax, metric in zip(axes, metrics):
+        values = [series[p].get(metric) for p in periods]
+        ax.plot(periods, values, marker="o")
+        display_metric = (series_labels or {}).get(metric, metric)
+        ax.set_ylabel(display_metric)
+        ax.grid(True, alpha=0.3)
+    axes[-1].set_xlabel(x_label)
+    if title:
+        fig.suptitle(title)
+    return fig
+
+
+def plot_multi_series_trend(
+    series: dict[str, dict[str, float]],
+    *,
+    x_label: str = "年份",
+    y_label: str | None = None,
+    series_labels: dict[str, str] | None = None,
+    title: str | None = None,
+    output_path: str | Path,
+    figsize: tuple[float, float] | None = None,
+    value_formatter: Callable[[float], str] | None = None,  # noqa: ARG001
+    layout: Literal["auto", "single", "twinx", "subplot"] = "auto",
+) -> Path:
+    """把 {period: {metric: value}} 渲染成趋势图 PNG。
+
+    layout 规则:
+    - 1 指标 -> single
+    - 2 指标 -> twinx (左右两个 Y 轴,左实线 / 右虚线)
+    - 3+ 指标 -> subplot (上下堆叠,共享 X 轴)
+    """
+    if not series:
+        raise ValueError("series is empty")
+
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    metrics = _all_metrics(series)
+    resolved = _resolve_layout(len(metrics), layout)
+    fig_size: tuple[float, float] = figsize if figsize else (10.0, 6.0)
+
+    if resolved == "single":
+        fig = _draw_single(
+            series, metrics, title=title, x_label=x_label, y_label=y_label,
+            series_labels=series_labels, figsize=fig_size,
+        )
+    elif resolved == "twinx":
+        fig = _draw_twinx(
+            series, metrics, title=title, x_label=x_label,
+            series_labels=series_labels, figsize=fig_size,
+        )
+    else:  # subplot
+        fig = _draw_subplot(
+            series, metrics, title=title, x_label=x_label,
+            series_labels=series_labels, figsize_per_panel=fig_size,
+        )
+
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    return output_path
