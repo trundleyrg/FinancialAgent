@@ -16,6 +16,7 @@ from src.skills.dividend.tools import (
     extract_dividend_info,
     filter_financial_data,
     get_dividend_stats_with_fallback,
+    render_dividend_trend_chart,
 )
 
 
@@ -257,6 +258,28 @@ def run(
             company_name, result.get("investment_rating", "UNKNOWN"),
         )
 
+        # 持久化趋势图 + 表格(失败仅 log warning,不影响 skill 整体)
+        chart_path: str | None = None
+        table_path: str | None = None
+        table_dict: dict[str, Any] | None = None
+        if stock_code and report_year:
+            try:
+                chart_dir = Path("data") / stock_code / "memory" / "charts"
+                chart_dir.mkdir(parents=True, exist_ok=True)
+                png_path = chart_dir / f"dividend_trend_{report_year}.png"
+                csv_path = png_path.with_suffix(".csv")
+                _, table = render_dividend_trend_chart(
+                    multi_year_summary, png_path,
+                    title=f"{company_name} - 分红股关键指标趋势",
+                )
+                table.to_csv(csv_path, index_label="年份")
+                chart_path = str(png_path)
+                table_path = str(csv_path)
+                table_dict = table.to_dict(orient="index")
+                logger.info("分红趋势图已生成: %s", chart_path)
+            except Exception as exc:
+                logger.warning("分红趋势图/表生成失败: %s", exc)
+
         # 持久化到 skill_analysis_results（失败仅日志，不影响返回）
         save_skill_result(
             "dividend", state, result,
@@ -264,6 +287,9 @@ def run(
                 "financial_data": financial_data,
                 "analysis_metrics": analysis_metrics,
                 "multi_year_raw": multi_year_raw,
+                "chart_path": chart_path,
+                "table_path": table_path,
+                "table_dict": table_dict,
             },
         )
 
