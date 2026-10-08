@@ -242,6 +242,25 @@ def render_dividend_trend_chart(
 # 红利分析 markdown 报告
 # ──────────────────────────────────────────────────────────────────────────────
 
+from decimal import ROUND_HALF_UP, Decimal
+
+
+def _round_half_up(x: float, n: int) -> float:
+    """四舍五入(标准数学四舍五入,非银行家舍入)保留 n 位小数。
+
+    Python 内置 ``round()`` 和 ``f"{x:.2f}"`` 都用 ROUND_HALF_EVEN(银行家舍入),
+    0.5 时往偶数方向走(round(0.5) == 0, round(1.5) == 2)。这跟中文用户
+    习惯的「四舍五入」(ROUND_HALF_UP, 0.5 一律往上入)不一致,改用 Decimal。
+    """
+    if not isinstance(x, (int, float)):
+        return x  # type: ignore[return-value]
+    if isinstance(x, float) and x != x:  # NaN
+        return x
+    if isinstance(x, float) and x in (float("inf"), float("-inf")):
+        return x
+    quant = Decimal(10) ** -n
+    return float(Decimal(str(x)).quantize(quant, rounding=ROUND_HALF_UP))
+
 
 def _md_escape_cell(value: Any) -> str:
     """转义 markdown 表格 cell 里的 `|` 和换行,避免破坏表格结构。"""
@@ -253,21 +272,43 @@ def _md_escape_cell(value: Any) -> str:
     return s
 
 
-def _md_format_value(value: Any) -> str:
-    """把 LLM 输出值格式化成表格显示文本。None → "N/A"、float → 2 位小数。"""
+def _md_format_number(value: Any) -> str:
+    """表格数字 cell:float → 四舍五入 2 位小数、int → 原样、NaN/None → "N/A"。
+
+    用于趋势表和 LLM 结论表的所有数字 cell,与「四舍五入」习惯保持一致。
+    """
     if value is None:
         return "N/A"
     if isinstance(value, bool):
         return str(value)
+    if isinstance(value, int):
+        return str(value)
     if isinstance(value, float):
         if value != value:  # NaN
             return "N/A"
-        return f"{value:.2f}"
-    return str(value)
+        return f"{_round_half_up(value, 2):.2f}"
+    return _md_escape_cell(value)
+
+
+def _md_format_value(value: Any) -> str:
+    """把 LLM 输出值格式化成表格显示文本。None → "N/A"、float → 2 位小数。
+
+    数字部分委托 ``_md_format_number``,保证 2 位小数 + 四舍五入口径一致。
+    """
+    if value is None:
+        return "N/A"
+    if isinstance(value, float):
+        if value != value:  # NaN
+            return "N/A"
+    return _md_format_number(value)
 
 
 def _df_to_markdown_table(df: pd.DataFrame) -> str:
-    """把 DataFrame 转成 markdown 表格(首列用 index 名 / index 值)。"""
+    """把 DataFrame 转成 markdown 表格(首列用 index 名 / index 值)。
+
+    数字 cell 走 ``_md_format_number`` 做四舍五入 2 位小数,字符串 cell 走
+    ``_md_escape_cell`` 仅做转义。index 如果是 int(如年份)按数字格式。
+    """
     cols = list(df.columns)
     header_cells = [_md_escape_cell(df.index.name or "")] + [
         _md_escape_cell(c) for c in cols
@@ -277,9 +318,11 @@ def _df_to_markdown_table(df: pd.DataFrame) -> str:
         "|" + "|".join(["------"] * len(header_cells)) + "|",
     ]
     for idx, row in df.iterrows():
-        cells = [_md_escape_cell(idx)] + [
-            _md_escape_cell(row[c]) for c in cols
-        ]
+        idx_cell = (
+            _md_format_number(idx) if isinstance(idx, (int, float)) and not isinstance(idx, bool)
+            else _md_escape_cell(idx)
+        )
+        cells = [idx_cell] + [_md_format_number(row[c]) for c in cols]
         lines.append("| " + " | ".join(cells) + " |")
     return "\n".join(lines)
 

@@ -5,7 +5,10 @@ import pandas as pd
 import pytest
 
 from src.skills import run_skill
-from src.skills.dividend.tools import build_dividend_markdown
+from src.skills.dividend.tools import (
+    _round_half_up,
+    build_dividend_markdown,
+)
 
 
 @pytest.fixture
@@ -232,6 +235,112 @@ def test_build_dividend_markdown_risks_fallback():
         company_name="A", stock_code="000004", report_year=2024,
     )
     assert "- 暂无" in md2
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 数字四舍五入(ROUND_HALF_UP)与表格 cell 格式化
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def test_round_half_up_standard_rounding():
+    """标准数学四舍五入:0.5 一律往上入,不是银行家舍入。"""
+    # 银行家舍入会得到 0 / 2;四舍五入得到 1 / 2
+    assert _round_half_up(0.5, 0) == 1
+    assert _round_half_up(1.5, 0) == 2
+    assert _round_half_up(2.5, 0) == 3
+    assert _round_half_up(0.25, 1) == 0.3
+    assert _round_half_up(0.125, 2) == 0.13
+    # 常规情况
+    assert _round_half_up(1.234, 2) == 1.23
+    assert _round_half_up(1.235, 2) == 1.24
+    assert _round_half_up(1.236, 2) == 1.24
+    # 整数
+    assert _round_half_up(10, 2) == 10
+    # NaN / inf 保持原样
+    assert _round_half_up(float("nan"), 2) != _round_half_up(float("nan"), 2)
+    assert _round_half_up(float("inf"), 2) == float("inf")
+
+
+def test_trend_table_values_rounded_to_two_decimals():
+    """趋势表数字 cell 四舍五入到 2 位小数。"""
+    table = pd.DataFrame(
+        {
+            "营业收入(亿元)": [38.51234, 40.455, 47.2],
+            "归母净利润(亿元)": [4.4321, 7.855, 11.50001],
+            "分红率(%)": [44.765, 53.725, 60.0],
+        },
+        index=["2022", "2023", "2024"],
+    )
+    md = build_dividend_markdown(
+        _FULL_RESULT, chart_path=None, table=table,
+        company_name="X", stock_code="000001", report_year=2024,
+    )
+    # 全部按四舍五入保留 2 位
+    assert "38.51" in md
+    assert "40.46" in md   # 40.455 四舍五入到 40.46(标准)
+    assert "47.20" in md
+    assert "4.43" in md
+    assert "7.86" in md   # 7.855 四舍五入到 7.86
+    assert "11.50" in md  # 11.50001 四舍五入到 11.50
+    assert "44.77" in md  # 44.765 标准四舍五入到 44.77
+    assert "53.73" in md
+    assert "60.00" in md
+
+
+def test_trend_table_uses_bankers_rounding_correctly_differs():
+    """对比:同样输入下标准四舍五入 vs 银行家舍入;确保实现用 ROUND_HALF_UP。
+
+    f"{1.235:.2f}" 银行家舍入 → "1.23"(5 前面是奇数 3 往偶数 2 方向)
+    ROUND_HALF_UP 一律往上 → "1.24"
+    """
+    table = pd.DataFrame(
+        {"x(%)": [1.235, 2.345]},
+        index=["2024", "2025"],
+    )
+    md = build_dividend_markdown(
+        _FULL_RESULT, chart_path=None, table=table,
+        company_name="X", stock_code="000001", report_year=2024,
+    )
+    # 1.235 标准四舍五入 → 1.24(不是银行家的 1.23)
+    assert "| 1.24 |" in md
+    # 2.345 → 2.35(银行家舍入 5 前面是 4 偶数 → 2.34;标准四舍五入 → 2.35)
+    assert "| 2.35 |" in md
+
+
+def test_llm_result_metrics_rounded_to_two_decimals():
+    """LLM 结论表(float 字段)也走四舍五入 2 位。"""
+    tricky = {
+        "dividend_yield": 4.555,        # → 4.56(标准)/ 4.56(银行家也入)
+        "payout_ratio": 60.005,          # → 60.01
+        "dividend_stability_years": 10,  # int,保持 10
+        "cash_flow_coverage": 1.555,     # → 1.56
+        "financial_health_score": 82,    # int
+        "profitability": {
+            "gross_margin": 65.555,      # → 65.56
+            "net_margin": 25.0,          # → 25.00
+            "roe": 18.004,               # → 18.00
+        },
+        "solvency": {"debt_to_asset": 30.0},
+        "valuation": {"pe_ratio": 15.205, "pb_ratio": 2.1},
+        "risk_factors": [],
+        "investment_rating": "BUY",
+        "reasoning": "ok",
+    }
+    md = build_dividend_markdown(
+        tricky, chart_path=None, table=None,
+        company_name="Y", stock_code="000002", report_year=2024,
+    )
+    assert "4.56" in md   # dividend_yield
+    assert "60.01" in md  # payout_ratio
+    assert "1.56" in md   # cash_flow_coverage
+    assert "65.56" in md  # gross_margin
+    assert "25.00" in md  # net_margin
+    assert "18.00" in md  # roe
+    assert "15.21" in md  # pe_ratio: 银行家 5 前面奇数 0 → 15.20;标准 5 往上 → 15.21
+    assert "2.10" in md   # pb_ratio: 2.1 → 2.10
+    # int 字段保持原样,不要变成 "10.00" / "82.00"
+    assert "| 10 |" in md
+    assert "| 82 |" in md
 
 
 # ──────────────────────────────────────────────────────────────────────────────
