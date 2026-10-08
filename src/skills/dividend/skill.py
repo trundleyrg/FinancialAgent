@@ -271,6 +271,13 @@ def run(
                 _, table = render_dividend_trend_chart(
                     multi_year_summary, png_path,
                     title=f"{company_name} - 分红股关键指标趋势",
+                    metric_explanations={
+                        "分红率(%)": (
+                            "现金分红 / 归母净利润 × 100 "
+                            "(现金分红取自合并现金流量表 "
+                            "'分配股利、利润或偿付利息支付的现金')"
+                        ),
+                    },
                 )
                 table.to_csv(csv_path, index_label="年份")
                 chart_path = str(png_path)

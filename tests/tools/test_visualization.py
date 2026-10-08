@@ -155,3 +155,61 @@ def test_combine_table_and_chart_share_same_values(tmp_path):
     # 表中数据应与 series 完全一致(无变换)
     assert df.loc["2021", "营收"] == series["2021"]["营收"]
     assert df.loc["2022", "净利"] == series["2022"]["净利"]
+
+
+def test_plot_with_metric_explanations(tmp_path):
+    """传 metric_explanations 时,图片仍能正常生成。"""
+    series = {
+        "2021": {"营收": 38.5e8, "净利": 4.4e8},
+        "2022": {"营收": 40.4e8, "净利": 7.8e8},
+    }
+    out = tmp_path / "explanations.png"
+    plot_multi_series_trend(
+        series, output_path=out,
+        metric_explanations={
+            "营收": "主营业务收入合计",
+            "净利": "归属于母公司股东的净利润",
+        },
+    )
+    assert out.exists()
+    assert out.stat().st_size > 1000
+
+
+def test_plot_with_metric_explanations_subplot_layout(tmp_path):
+    """3+ 指标 + explanations 走 subplot 路径,仍能生成。"""
+    series = {
+        "2021": {"营收": 38.5e8, "净利": 4.4e8, "分红率": 44.77},
+        "2022": {"营收": 40.4e8, "净利": 7.8e8, "分红率": 53.72},
+    }
+    out = tmp_path / "sub_explanations.png"
+    plot_multi_series_trend(
+        series, output_path=out,
+        metric_explanations={
+            "分红率": "现金分红 / 归母净利润 × 100",
+        },
+    )
+    assert out.exists()
+    assert out.stat().st_size > 1000
+
+
+def test_combine_passes_metric_explanations_through(tmp_path):
+    """render_trend_chart_and_table 透传 metric_explanations 给 plot。"""
+    series = {
+        "2021": {"营收": 1.0, "净利": 0.5},
+        "2022": {"营收": 2.0, "净利": 1.0},
+    }
+    out = tmp_path / "combo_expl.png"
+    p, _ = render_trend_chart_and_table(
+        series, output_path=out,
+        metric_explanations={"营收": "主营业务收入合计"},
+    )
+    assert p == out
+    assert out.exists()
+
+
+def test_plot_empty_explanations_dict_renders_cleanly(tmp_path):
+    """空 dict 应等价于 None,不报错。"""
+    series = {"2021": {"营收": 1.0}, "2022": {"营收": 2.0}}
+    out = tmp_path / "empty_expl.png"
+    plot_multi_series_trend(series, output_path=out, metric_explanations={})
+    assert out.exists()

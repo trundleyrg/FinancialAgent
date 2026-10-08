@@ -183,6 +183,7 @@ def render_dividend_trend_chart(
     multi_year_summary: dict[str, dict[str, Any]],
     output_path: str | Path,
     title: str | None = None,
+    metric_explanations: dict[str, str] | None = None,
 ) -> tuple[Path, pd.DataFrame]:
     """把 dividend skill 的 multi_year_summary 渲染成 3 子图趋势 + 表格。
 
@@ -197,6 +198,10 @@ def render_dividend_trend_chart(
                          "cash_for_dividend_and_interest": float|None, ...}}
         output_path: PNG 写入路径。
         title: 整图标题。None 时使用通用默认"分红股关键指标趋势"。
+        metric_explanations: {metric 显示名: 解释文本(计算公式/定义)},
+            渲染到图片下方居中。常见用法:把分红率的计算公式传进来。
+            例:{"分红率(%)": "现金分红 / 归母净利润 × 100"}
+            None 或空 dict 不渲染。
 
     Returns:
         (chart_path, table) 二元组:
@@ -228,4 +233,5 @@ def render_dividend_trend_chart(
         output_path=output_path,
         title=title if title is not None else "分红股关键指标趋势",
         x_label="年份",
+        metric_explanations=metric_explanations,
     )

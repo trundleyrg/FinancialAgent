@@ -18,7 +18,7 @@ df = build_trend_table({
 # index=period, columns=营收/净利（按首次出现顺序）
 ```
 
-### `plot_multi_series_trend(series, *, output_path, layout="auto", ...) -> Path`
+### `plot_multi_series_trend(series, *, output_path, layout="auto", ..., metric_explanations=None) -> Path`
 
 渲染 PNG 到 `output_path`。`layout` 自动规则：
 
@@ -30,7 +30,20 @@ df = build_trend_table({
 
 显式 `layout="subplot"` 可强制覆盖。
 
-### `render_trend_chart_and_table(series, *, output_path, ...) -> tuple[Path, DataFrame]`
+`metric_explanations`（可选，`dict[str, str]`）— 在图片下方居中渲染多行「指标名：解释文本」，常用于把计算公式/定义挂在图上。dict 的 key 应与 `series` 中的 metric 名（或 `series_labels` 映射后的显示名）保持一致，文本由调用方提供。None / 空 dict 不渲染。
+
+```python
+plot_multi_series_trend(
+    series,
+    output_path="dividend_trend.png",
+    metric_explanations={
+        "分红率(%)": "现金分红 / 归母净利润 × 100",
+        "营业收入(亿元)": "主营业务收入合计",
+    },
+)
+```
+
+### `render_trend_chart_and_table(series, *, output_path, ..., metric_explanations=None) -> tuple[Path, DataFrame]`
 
 combine：写图 + 返回表。图与表共享同一份 `series` 数据，保证口径一致。
 
@@ -65,3 +78,4 @@ dividend skill 已经把 wrapper（`render_dividend_trend_chart`）接进去：
 - PNG 路径：`data/{stock_code}/memory/charts/dividend_trend_{year}.png`
 - CSV 路径：同名 `.csv`
 - 表格 dict（供 SQL `json_extract`）：写进 `skill_analysis_results.input_context.table_dict`
+- 指标解释（计算公式）：由 `skill.py` 通过 `metric_explanations` 透传，渲染在图片下方居中位置。dividend skill 目前会传分红率公式说明。

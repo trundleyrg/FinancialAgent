@@ -197,6 +197,35 @@ def _draw_subplot(
     return fig
 
 
+def _draw_metric_explanations(
+    fig: matplotlib.figure.Figure,
+    explanations: dict[str, str] | None,
+) -> None:
+    """在图片下方渲染指标解释文本(计算公式/定义)。
+
+    Args:
+        fig: 目标 figure。
+        explanations: {metric 显示名: 解释文本};空或 None 时跳过。
+
+    行为:
+        - 把 dict 渲染成多行 `"metric: 解释"`,居中放在 figure 最底部
+        - 按行数动态调整 subplots_adjust(bottom=...),腾出文本空间
+        - 必须在 fig.tight_layout() 之后再调(避免被 tight_layout 覆盖)
+    """
+    if not explanations:
+        return
+    lines = [f"{k}: {v}" for k, v in explanations.items()]
+    text = "\n".join(lines)
+    # 行数越多底部留白越多:1 行 0.10,每多 1 行 +0.04
+    fig.subplots_adjust(bottom=0.10 + 0.04 * (len(lines) - 1))
+    fig.text(
+        0.5, 0.005,
+        text,
+        ha="center", va="bottom",
+        fontsize=8, wrap=True,
+    )
+
+
 def plot_multi_series_trend(
     series: dict[str, dict[str, float]],
     *,
@@ -208,6 +237,7 @@ def plot_multi_series_trend(
     figsize: tuple[float, float] | None = None,
     value_formatter: Callable[[float], str] | None = None,  # noqa: ARG001
     layout: Literal["auto", "single", "twinx", "subplot"] = "auto",
+    metric_explanations: dict[str, str] | None = None,
 ) -> Path:
     """把 {period: {metric: value}} 渲染成趋势图 PNG。
 
@@ -221,6 +251,9 @@ def plot_multi_series_trend(
         figsize: (width, height) 英寸;subplot 模式按面板数纵向叠加。
         value_formatter: 预留参数(当前未挂到画图路径上)。
         layout: "auto"(1→single / 2→twinx / 3+→subplot)或显式覆盖。
+        metric_explanations: {metric 显示名: 解释文本(计算公式/定义)},
+            渲染到图片下方居中多行;None 或空 dict 不渲染。
+            例:{"分红率(%)": "现金分红 / 归母净利润 × 100"}
 
     Returns:
         Path: 写入 PNG 的路径(与 output_path 相同对象)。
@@ -252,6 +285,7 @@ def plot_multi_series_trend(
         )
 
     fig.tight_layout()
+    _draw_metric_explanations(fig, metric_explanations)
     fig.savefig(output_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     return output_path
@@ -268,6 +302,7 @@ def render_trend_chart_and_table(
     value_formatter: Callable[[float], str] | None = None,
     figsize: tuple[float, float] | None = None,
     layout: Literal["auto", "single", "twinx", "subplot"] = "auto",
+    metric_explanations: dict[str, str] | None = None,
 ) -> tuple[Path, pd.DataFrame]:
     """画图 + 构造表格;表格与图共享同一份 series,保证口径一致。
 
@@ -282,6 +317,7 @@ def render_trend_chart_and_table(
             None 保持原值。
         figsize: (width, height) 英寸。
         layout: "auto" 或显式 single/twinx/subplot。
+        metric_explanations: {metric 显示名: 解释文本},透传给 plot 渲染到图片下方。
 
     Returns:
         (chart_path, table) 二元组:
@@ -299,6 +335,7 @@ def render_trend_chart_and_table(
         figsize=figsize,
         value_formatter=value_formatter,
         layout=layout,
+        metric_explanations=metric_explanations,
     )
     table = build_trend_table(
         series,
