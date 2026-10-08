@@ -232,3 +232,149 @@ def test_build_dividend_markdown_risks_fallback():
         company_name="A", stock_code="000004", report_year=2024,
     )
     assert "- 暂无" in md2
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# skill 集成:验证 dividend skill run() 成功后写独立 markdown 报告
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def test_skill_writes_dividend_markdown_report(tmp_path, monkeypatch):
+    """端到端:mock 数据抓取 + LLM,跑通 run(),验证:
+    1. markdown 文件被写入 data/{stock}/memory/
+    2. 报告里图在上、表格在下
+    3. input_context.markdown_path 被回填
+    """
+    import json
+    from unittest.mock import MagicMock
+
+    # 把 data/{stock}/memory 临时重定向到 tmp_path
+    stock_code = "999999"
+    company_name = "测试公司"
+
+    monkeypatch.chdir(tmp_path)
+    memory_dir = tmp_path / "data" / stock_code / "memory"
+    memory_dir.mkdir(parents=True)
+
+    # ── mock 数据抓取 ──
+    monkeypatch.setattr(
+        "src.skills.dividend.skill.get_all_financial_data",
+        lambda **kw: {
+            "balance_sheet": {"total_assets": 1e10},
+            "income_statement": {"net_profit": 1e8, "operating_revenue": 5e8},
+            "cash_flow": {
+                "net_cash_from_operations": 1.2e8,
+                "cash_for_dividend_and_interest": 5e7,
+            },
+        },
+    )
+    monkeypatch.setattr(
+        "src.skills.dividend.skill.get_multi_year_financial_data",
+        lambda **kw: {
+            "2022": {
+                "consolidated_income_statement": {"operating_revenue": 4e8, "net_profit": 8e7},
+                "consolidated_cash_flow_statement": {"net_cash_from_operations": 1e8, "cash_for_dividend_and_interest": 4e7},
+                "consolidated_balance_sheet": {"total_assets": 9e9},
+            },
+            "2023": {
+                "consolidated_income_statement": {"operating_revenue": 5e8, "net_profit": 1e8},
+                "consolidated_cash_flow_statement": {"net_cash_from_operations": 1.2e8, "cash_for_dividend_and_interest": 5e7},
+                "consolidated_balance_sheet": {"total_assets": 1e10},
+            },
+        },
+    )
+    monkeypatch.setattr(
+        "src.skills.dividend.skill.calculate_profitability",
+        lambda inc, bs: {"gross_margin": 60, "net_margin": 20, "roe": 15},
+    )
+    monkeypatch.setattr(
+        "src.skills.dividend.skill.calculate_liquidity",
+        lambda bs: {"current_ratio": 2.0},
+    )
+    monkeypatch.setattr(
+        "src.skills.dividend.skill.calculate_solvency",
+        lambda bs, inc: {"debt_to_asset": 30},
+    )
+    monkeypatch.setattr(
+        "src.skills.dividend.skill.get_stock_market_data",
+        lambda code: {"pe_pb_history": []},
+    )
+    monkeypatch.setattr(
+        "src.skills.dividend.skill.get_dividend_stats_with_fallback",
+        lambda code, years=5: {"avg_dividend_yield": 4.0},
+    )
+    monkeypatch.setattr(
+        "src.skills.dividend.skill.compute_dividend_stability_years",
+        lambda *a, **k: 5,
+    )
+    monkeypatch.setattr(
+        "src.skills.dividend.skill._fetch_total_shares",
+        lambda *a, **k: 1e9,
+    )
+
+    # ── mock LLM 链 ──
+    llm_result = dict(_FULL_RESULT, investment_rating="BUY", reasoning="分红稳")
+    captured_ctx: dict = {}
+
+    def fake_save(name, state, result, input_context=None):
+        captured_ctx.update(input_context or {})
+        return True
+
+    monkeypatch.setattr("src.skills.dividend.skill.save_skill_result", fake_save)
+
+    fake_chain = MagicMock()
+    fake_chain.invoke.return_value = llm_result
+    # 链式语法 `prompt | llm | JsonOutputParser()` 会调 __or__,
+    # MagicMock 默认不支持 → 用真类包一层。
+    class _Chain:
+        def __init__(self, inner):
+            self._inner = inner
+        def __or__(self, other):
+            return self
+        def invoke(self, x):
+            return self._inner.invoke(x)
+
+    monkeypatch.setattr(
+        "src.skills.dividend.skill.ChatPromptTemplate.from_messages",
+        lambda msgs: _Chain(fake_chain),
+    )
+
+    from src.skills import run_skill
+    state = {
+        "company_name": company_name,
+        "stock_code": stock_code,
+        "report_year": 2024,
+        "report_period": "FY",
+    }
+    delta = run_skill("dividend", state, llm=MagicMock())
+
+    # 1. skill 没失败
+    assert "error_msg" not in delta, f"skill 失败: {delta.get('error_msg')}"
+
+    # 2. markdown 文件被写入
+    md_path = captured_ctx.get("markdown_path")
+    assert md_path is not None, "input_context.markdown_path 未回填"
+    md_file = Path(md_path).resolve()
+    assert md_file.exists(), f"markdown 文件不存在: {md_file}"
+    assert md_file.parent.resolve() == memory_dir.resolve(), (
+        f"markdown 目录不对: {md_file.parent} vs {memory_dir}"
+    )
+
+    # 3. 文件名格式
+    assert md_file.name == f"分析报告_分红_{company_name}_{stock_code}_2024.md"
+
+    # 4. 报告里图在上、表格在下
+    content = md_file.read_text(encoding="utf-8")
+    assert "(charts/dividend_trend_2024.png)" in content, "图相对路径应在 markdown 中"
+    # 相对路径,不是绝对路径
+    assert "/data/999999/memory/charts/" not in content, "应该是相对路径,不是绝对路径"
+
+    chart_pos = content.find("(charts/dividend_trend_2024.png)")
+    import re
+    table_header = re.search(r"\|\s*-{3,}\s*\|", content)
+    assert table_header is not None
+    assert chart_pos < table_header.start(), "图必须在上、表格在下"
+
+    # 5. LLM 结论段存在
+    assert "**投资评级: BUY**" in content
+    assert "分红稳" in content

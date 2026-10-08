@@ -12,6 +12,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from src.graph.state import FinancialState
 from src.skills._loader import read_skill_description
 from src.skills.dividend.tools import (
+    build_dividend_markdown,
     compute_dividend_stability_years,
     extract_dividend_info,
     filter_financial_data,
@@ -262,13 +263,14 @@ def run(
         chart_path: str | None = None
         table_path: str | None = None
         table_dict: dict[str, Any] | None = None
+        trend_table = None
         if stock_code and report_year:
             try:
                 chart_dir = Path("data") / stock_code / "memory" / "charts"
                 chart_dir.mkdir(parents=True, exist_ok=True)
                 png_path = chart_dir / f"dividend_trend_{report_year}.png"
                 csv_path = png_path.with_suffix(".csv")
-                _, table = render_dividend_trend_chart(
+                _, trend_table = render_dividend_trend_chart(
                     multi_year_summary, png_path,
                     title=f"{company_name} - 分红股关键指标趋势",
                     metric_explanations={
@@ -279,13 +281,46 @@ def run(
                         ),
                     },
                 )
-                table.to_csv(csv_path, index_label="年份")
+                trend_table.to_csv(csv_path, index_label="年份")
                 chart_path = str(png_path)
                 table_path = str(csv_path)
-                table_dict = table.to_dict(orient="index")
+                table_dict = trend_table.to_dict(orient="index")
                 logger.info("分红趋势图已生成: %s", chart_path)
             except Exception as exc:
                 logger.warning("分红趋势图/表生成失败: %s", exc)
+
+        # 持久化独立红利分析 markdown 报告(图在上、表在下 + LLM 结论)。
+        # 失败仅 log warning,不影响 skill 整体;markdown 路径回填到 input_context。
+        markdown_path: str | None = None
+        if stock_code and report_year and isinstance(result, dict):
+            try:
+                memory_dir = Path("data") / stock_code / "memory"
+                memory_dir.mkdir(parents=True, exist_ok=True)
+                md_filename = (
+                    f"分析报告_分红_{company_name}_{stock_code}_{report_year}.md"
+                )
+                md_path = memory_dir / md_filename
+                # 图相对路径相对 markdown 文件目录(memory/charts/...)
+                chart_rel: str | None = None
+                if chart_path:
+                    chart_rel = (
+                        Path(chart_path).relative_to(memory_dir)
+                        .as_posix()
+                    )
+                md_content = build_dividend_markdown(
+                    result,
+                    chart_path=chart_rel,
+                    table=trend_table,
+                    company_name=company_name,
+                    stock_code=stock_code,
+                    report_year=report_year,
+                    report_period=report_period,
+                )
+                md_path.write_text(md_content, encoding="utf-8")
+                markdown_path = str(md_path)
+                logger.info("红利分析 markdown 已生成: %s", markdown_path)
+            except Exception as exc:
+                logger.warning("红利分析 markdown 生成失败: %s", exc)
 
         # 持久化到 skill_analysis_results（失败仅日志，不影响返回）
         save_skill_result(
@@ -297,6 +332,7 @@ def run(
                 "chart_path": chart_path,
                 "table_path": table_path,
                 "table_dict": table_dict,
+                "markdown_path": markdown_path,
             },
         )
 
