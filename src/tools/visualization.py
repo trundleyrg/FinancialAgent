@@ -255,3 +255,54 @@ def plot_multi_series_trend(
     fig.savefig(output_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     return output_path
+
+
+def render_trend_chart_and_table(
+    series: dict[str, dict[str, float]],
+    *,
+    output_path: str | Path,
+    title: str | None = None,
+    x_label: str = "年份",
+    y_label: str | None = None,
+    series_labels: dict[str, str] | None = None,
+    value_formatter: Callable[[float], str] | None = None,
+    figsize: tuple[float, float] | None = None,
+    layout: Literal["auto", "single", "twinx", "subplot"] = "auto",
+) -> tuple[Path, pd.DataFrame]:
+    """画图 + 构造表格;表格与图共享同一份 series,保证口径一致。
+
+    Args:
+        series: 嵌套 dict,外层 key=period,内层 key=metric。
+        output_path: PNG 写入路径(与 plot_multi_series_trend 行为一致)。
+        title: 整图标题(透传给 plot)。
+        x_label: X 轴标签。
+        y_label: Y 轴标签(透传,仅 single 布局生效)。
+        series_labels: metric 名 -> 显示名映射,同时改图的 label 和表的列名。
+        value_formatter: 把 float 格式化成字符串(同时作用于图与表);
+            None 保持原值。
+        figsize: (width, height) 英寸。
+        layout: "auto" 或显式 single/twinx/subplot。
+
+    Returns:
+        (chart_path, table) 二元组:
+        - chart_path: 写入的 PNG 路径(Path)。
+        - table: build_trend_table() 的结果,index=period(按字典序),
+                 columns=metric(按首次出现顺序)。
+    """
+    chart_path = plot_multi_series_trend(
+        series,
+        x_label=x_label,
+        y_label=y_label,
+        series_labels=series_labels,
+        title=title,
+        output_path=output_path,
+        figsize=figsize,
+        value_formatter=value_formatter,
+        layout=layout,
+    )
+    table = build_trend_table(
+        series,
+        series_labels=series_labels,
+        value_formatter=value_formatter,
+    )
+    return chart_path, table

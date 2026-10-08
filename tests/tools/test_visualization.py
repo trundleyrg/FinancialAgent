@@ -11,6 +11,7 @@ from src.tools.visualization import (
     _apply_cjk_font,
     build_trend_table,
     plot_multi_series_trend,
+    render_trend_chart_and_table,
 )
 
 
@@ -127,3 +128,30 @@ def test_plot_layout_subplot_with_single_metric(tmp_path):
     out = tmp_path / "subplot_one.png"
     plot_multi_series_trend(series, output_path=out, layout="subplot")
     assert out.exists()
+
+
+def test_combine_returns_path_and_dataframe(tmp_path):
+    series = {
+        "2021": {"营收": 38.5e8, "净利": 4.4e8},
+        "2022": {"营收": 40.4e8, "净利": 7.8e8},
+    }
+    out = tmp_path / "combo.png"
+    p, df = render_trend_chart_and_table(series, output_path=out)
+    assert p == out
+    assert out.exists()
+    assert list(df.index) == ["2021", "2022"]
+    assert df.loc["2021", "营收"] == 38.5e8
+    assert df.loc["2022", "净利"] == 7.8e8
+
+
+def test_combine_table_and_chart_share_same_values(tmp_path):
+    """图与表共享同一 series 口径:表里的数值就是图里画的。"""
+    series = {
+        "2021": {"营收": 1.0, "净利": 0.5},
+        "2022": {"营收": 2.0, "净利": 1.0},
+    }
+    out = tmp_path / "shared.png"
+    _, df = render_trend_chart_and_table(series, output_path=out)
+    # 表中数据应与 series 完全一致(无变换)
+    assert df.loc["2021", "营收"] == series["2021"]["营收"]
+    assert df.loc["2022", "净利"] == series["2022"]["净利"]
