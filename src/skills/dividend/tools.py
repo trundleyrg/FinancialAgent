@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Any, Dict
 
 from src.db.db_connector import get_db
@@ -174,3 +175,53 @@ def get_dividend_stats_with_fallback(
     if isinstance(stats, dict):
         stats["source"] = "live"
     return stats
+
+
+def render_dividend_trend_chart(
+    multi_year_summary: dict[str, dict[str, Any]],
+    output_path: str | Path,
+) -> tuple[Path, Any]:
+    """把 dividend skill 的 multi_year_summary 渲染成 3 子图趋势 + 表格。
+
+    子图 1: 营业收入(亿元)
+    子图 2: 归母净利润(亿元)
+    子图 3: 分红率(%) = cash_for_dividend_and_interest / net_profit * 100
+            缺失年份该指标为 None,subplot 自然跳过。
+
+    Args:
+        multi_year_summary: 与 skill.py 里的 multi_year_summary 同形
+            {year_str: {"operating_revenue": float|None, "net_profit": float|None,
+                         "cash_for_dividend_and_interest": float|None, ...}}
+        output_path: PNG 写入路径。
+
+    Returns:
+        (chart_path, table) 二元组:
+        - chart_path: 写入的 PNG 路径(Path)。
+        - table: build_trend_table() 的结果(DataFrame),
+                 index=年份字符串(字典序), columns=3 个 metric(中文 label)。
+    """
+    from src.tools.visualization import render_trend_chart_and_table
+
+    series: dict[str, dict[str, float]] = {}
+    for year, m in multi_year_summary.items():
+        net_profit = m.get("net_profit")
+        cash_div = m.get("cash_for_dividend_and_interest")
+        payout_ratio: float | None = None
+        if net_profit and cash_div is not None and net_profit > 0:
+            payout_ratio = round(cash_div / net_profit * 100, 2)
+        series[str(year)] = {
+            "营业收入(亿元)": (
+                m["operating_revenue"] / 1e8
+                if m.get("operating_revenue") is not None else None  # type: ignore[dict-item]
+            ),
+            "归母净利润(亿元)": (
+                net_profit / 1e8 if net_profit else None  # type: ignore[dict-item]
+            ),
+            "分红率(%)": payout_ratio,
+        }
+    return render_trend_chart_and_table(
+        series,
+        output_path=output_path,
+        title="东阿阿胶 - 分红股关键指标趋势",
+        x_label="年份",
+    )
