@@ -2,8 +2,9 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import pandas as pd
 
@@ -234,4 +235,188 @@ def render_dividend_trend_chart(
         title=title if title is not None else "分红股关键指标趋势",
         x_label="年份",
         metric_explanations=metric_explanations,
+    )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 红利分析 markdown 报告
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def _md_escape_cell(value: Any) -> str:
+    """转义 markdown 表格 cell 里的 `|` 和换行,避免破坏表格结构。"""
+    if value is None:
+        return ""
+    s = str(value)
+    s = s.replace("|", "\\|")
+    s = s.replace("\r\n", "\n").replace("\n", "<br>")
+    return s
+
+
+def _md_format_value(value: Any) -> str:
+    """把 LLM 输出值格式化成表格显示文本。None → "N/A"、float → 2 位小数。"""
+    if value is None:
+        return "N/A"
+    if isinstance(value, bool):
+        return str(value)
+    if isinstance(value, float):
+        if value != value:  # NaN
+            return "N/A"
+        return f"{value:.2f}"
+    return str(value)
+
+
+def _df_to_markdown_table(df: pd.DataFrame) -> str:
+    """把 DataFrame 转成 markdown 表格(首列用 index 名 / index 值)。"""
+    cols = list(df.columns)
+    header_cells = [_md_escape_cell(df.index.name or "")] + [
+        _md_escape_cell(c) for c in cols
+    ]
+    lines = [
+        "| " + " | ".join(header_cells) + " |",
+        "|" + "|".join(["------"] * len(header_cells)) + "|",
+    ]
+    for idx, row in df.iterrows():
+        cells = [_md_escape_cell(idx)] + [
+            _md_escape_cell(row[c]) for c in cols
+        ]
+        lines.append("| " + " | ".join(cells) + " |")
+    return "\n".join(lines)
+
+
+def build_dividend_markdown(
+    result: Dict[str, Any],
+    *,
+    chart_path: Optional[str] = None,
+    table: Optional[pd.DataFrame] = None,
+    company_name: Optional[str] = None,
+    stock_code: Optional[str] = None,
+    report_year: Optional[int] = None,
+    report_period: Optional[str] = None,
+) -> str:
+    """把 dividend skill 的 LLM 结果 + 趋势图 + 趋势表渲染成自包含 markdown 报告。
+
+    章节顺序固定(图在上、表格在下):
+    1. 标题 + 元数据
+    2. 一、关键指标趋势:图(若有) + 多年趋势表(若有)
+    3. 二、关键指标:股息率 / 分红率 / 连续分红年限 / 现金流覆盖 / 健康度评分
+    4. 三-五、盈利能力 / 偿债能力 / 估值(子表)
+    5. 六、风险因素(列表)
+    6. 七、投资评级 + 推理文本
+
+    Args:
+        result: LLM 输出的 dict,字段参见 src/skills/dividend/SKILL.md。
+            顶层: dividend_yield / payout_ratio / dividend_stability_years /
+            cash_flow_coverage / financial_health_score / investment_rating /
+            reasoning / risk_factors;
+            嵌套: profitability {gross_margin, net_margin, roe},
+            solvency {debt_to_asset}, valuation {pe_ratio, pb_ratio}。
+        chart_path: 嵌入 markdown 的图路径(通常是相对 markdown 文件目录的相对路径,
+            例 "charts/dividend_trend_2024.png");None 时跳过一、图。
+        table: 多年趋势 DataFrame(由 build_trend_table 生成);
+               None 或空 DataFrame 时跳过一、表。
+        company_name / stock_code / report_year / report_period: 用于标题与元数据;
+            缺省时回落到 "未知xxx"。
+
+    Returns:
+        完整 markdown 字符串(UTF-8,LF 换行)。
+    """
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    # 1. 标题 + 元数据
+    title = f"# 红利股分析报告 - {company_name or '未知公司'}"
+    if stock_code:
+        title += f" ({stock_code})"
+    if report_year is not None:
+        title += f" {report_year}年报"
+
+    header_lines: list[str] = [title, ""]
+    header_lines.append(f"> 生成时间: {timestamp}")
+    if report_year is not None:
+        header_lines.append(
+            f"> 报告期: {report_year}年 {report_period or '未知'}"
+        )
+    header_lines += ["", "---", ""]
+
+    # 2. 一、关键指标趋势(图 + 表)
+    trend_lines: list[str] = ["## 一、关键指标趋势", ""]
+    if chart_path:
+        alt = f"{company_name or '公司'} 红利股关键指标趋势"
+        trend_lines.append(f"![{alt}]({chart_path})")
+        trend_lines.append("")
+    if table is not None and not table.empty:
+        trend_lines.append(_df_to_markdown_table(table))
+        trend_lines.append("")
+    if not chart_path and (table is None or table.empty):
+        trend_lines.append("*（趋势图/表数据缺失）*")
+        trend_lines.append("")
+    trend_lines += ["---", ""]
+
+    # 3. 二、关键指标
+    key_rows = [
+        ("股息率(%)", result.get("dividend_yield")),
+        ("分红率(%)", result.get("payout_ratio")),
+        ("连续分红年限(年)", result.get("dividend_stability_years")),
+        ("自由现金流对分红覆盖率(倍)", result.get("cash_flow_coverage")),
+        ("财务健康度评分(0-100)", result.get("financial_health_score")),
+    ]
+    key_lines = ["## 二、关键指标", ""]
+    key_lines.append("| 指标 | 数值 |")
+    key_lines.append("|------|------|")
+    for name, value in key_rows:
+        key_lines.append(f"| {name} | {_md_format_value(value)} |")
+    key_lines += ["", "---", ""]
+
+    # 4. 三-五、子能力指标
+    profit = result.get("profitability") or {}
+    solv = result.get("solvency") or {}
+    val = result.get("valuation") or {}
+
+    sub_sections: list[tuple[str, list[tuple[str, Any]]]] = [
+        ("## 三、盈利能力", [
+            ("毛利率(%)", profit.get("gross_margin")),
+            ("净利率(%)", profit.get("net_margin")),
+            ("ROE(%)", profit.get("roe")),
+        ]),
+        ("## 四、偿债能力", [
+            ("资产负债率(%)", solv.get("debt_to_asset")),
+        ]),
+        ("## 五、估值", [
+            ("市盈率(倍)", val.get("pe_ratio")),
+            ("市净率(倍)", val.get("pb_ratio")),
+        ]),
+    ]
+    sub_lines: list[str] = []
+    for heading, rows in sub_sections:
+        sub_lines += [heading, "", "| 指标 | 数值 |", "|------|------|"]
+        for name, value in rows:
+            sub_lines.append(f"| {name} | {_md_format_value(value)} |")
+        sub_lines.append("")
+    sub_lines += ["---", ""]
+
+    # 5. 六、风险因素
+    risk_lines = ["## 六、风险因素", ""]
+    risks = result.get("risk_factors")
+    if isinstance(risks, list) and risks:
+        for r in risks:
+            risk_lines.append(f"- {_md_escape_cell(r)}")
+    else:
+        risk_lines.append("- 暂无")
+    risk_lines += ["", "---", ""]
+
+    # 6. 七、投资评级与理由
+    rating = result.get("investment_rating", "N/A")
+    reasoning = result.get("reasoning") or "暂无分析理由"
+    rating_lines = [
+        "## 七、投资评级与理由",
+        "",
+        f"**投资评级: {rating}**",
+        "",
+        reasoning,
+        "",
+    ]
+
+    return "\n".join(
+        header_lines + trend_lines + key_lines + sub_lines +
+        risk_lines + rating_lines,
     )
