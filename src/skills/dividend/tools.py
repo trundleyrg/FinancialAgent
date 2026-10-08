@@ -5,6 +5,8 @@ import logging
 from pathlib import Path
 from typing import Any, Dict
 
+import pandas as pd
+
 from src.db.db_connector import get_db
 from src.tools.market_data_tool import get_dividend_stats
 
@@ -180,7 +182,8 @@ def get_dividend_stats_with_fallback(
 def render_dividend_trend_chart(
     multi_year_summary: dict[str, dict[str, Any]],
     output_path: str | Path,
-) -> tuple[Path, Any]:
+    title: str | None = None,
+) -> tuple[Path, pd.DataFrame]:
     """把 dividend skill 的 multi_year_summary 渲染成 3 子图趋势 + 表格。
 
     子图 1: 营业收入(亿元)
@@ -193,6 +196,7 @@ def render_dividend_trend_chart(
             {year_str: {"operating_revenue": float|None, "net_profit": float|None,
                          "cash_for_dividend_and_interest": float|None, ...}}
         output_path: PNG 写入路径。
+        title: 整图标题。None 时使用通用默认"分红股关键指标趋势"。
 
     Returns:
         (chart_path, table) 二元组:
@@ -207,7 +211,7 @@ def render_dividend_trend_chart(
         net_profit = m.get("net_profit")
         cash_div = m.get("cash_for_dividend_and_interest")
         payout_ratio: float | None = None
-        if net_profit and cash_div is not None and net_profit > 0:
+        if cash_div is not None and net_profit is not None and net_profit > 0:
             payout_ratio = round(cash_div / net_profit * 100, 2)
         series[str(year)] = {
             "营业收入(亿元)": (
@@ -222,6 +226,6 @@ def render_dividend_trend_chart(
     return render_trend_chart_and_table(
         series,
         output_path=output_path,
-        title="东阿阿胶 - 分红股关键指标趋势",
+        title=title if title is not None else "分红股关键指标趋势",
         x_label="年份",
     )
