@@ -1,26 +1,14 @@
 """通用多序列趋势图模块。
 
-提供 3 个公开 API:
-- build_trend_table: 把 {period: {metric: value}} 展平成 DataFrame (不依赖 matplotlib)
-- plot_multi_series_trend: 渲染 PNG 趋势图,支持 auto/single/twinx/subplot 4 种布局
-- render_trend_chart_and_table: combine — 写图 + 返回表
-
-默认按指标数量自动选择布局:
-- 1 指标 -> single
-- 2 指标 -> twinx
-- 3+ 指标 -> subplot
-
-未来周期股 commodity price 历史可直接复用 plot_multi_series_trend。
+模块初始化时设置 matplotlib 的 CJK 字体 fallback 链与负号修复;
+3 个公开 API(build_trend_table / plot_multi_series_trend /
+render_trend_chart_and_table)由后续任务逐个追加到本文件。
 """
 from __future__ import annotations
 
 import logging
-from pathlib import Path
-from typing import Any, Callable, Literal
 
 import matplotlib
-import matplotlib.pyplot as plt
-import pandas as pd
 
 logger = logging.getLogger("Tools.Visualization")
 
