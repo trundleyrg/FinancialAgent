@@ -41,7 +41,10 @@ description: 红利股分析：分红能力 + 财务健康度 + 股息率 + 估�
 返回 JSON 格式，包含以下字段：
 
 - `dividend_yield` — 股息率 (%)
-- `payout_ratio` — 分红率 (%)
+- `payout_ratio` — 分红率 (%) = 申报分红总额 / 归母净利润 × 100
+  申报分红 = Σ (每 10 股派息 / 10) × 当年总股本,取自 `capital_change_events` 表的
+  `cash_dividend` / `combination` 事件。事件缺失时回退到现金流量表
+  `cash_for_dividend_and_interest` 字段(含利息,仅作估算)
 - `dividend_stability_years` — 连续分红年限
 - `cash_flow_coverage` — 自由现金流对分红覆盖率
 - `financial_health_score` — 财务健康度评分 (0-100)

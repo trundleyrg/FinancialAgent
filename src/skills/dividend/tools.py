@@ -102,19 +102,185 @@ def _compute_dividend_stability_years(
     return years
 
 
-def extract_dividend_info(financial_data: Dict[str, Any]) -> Dict[str, Any]:
-    """从财务数据中提取分红相关信息。
+def _compute_payout_from_events(
+    events: list[dict[str, Any]],
+    total_shares: float | None,
+    net_profit: float | None,
+) -> float | None:
+    """从申报分红事件算分红率(%):Σ(cash_per_10_shares/10 × total_shares) / net_profit × 100。
+
+    只统计 event_type ∈ ('cash_dividend', 'combination') 且 cash_per_10_shares > 0
+    的事件,其他事件类型(送股/转增/配股)跳过,因为它们不含现金。
+
+    返回 None 时调用方应退回到现金流字段(``cash_for_dividend_and_interest``)。
+    """
+    if not events or not total_shares or total_shares <= 0:
+        return None
+    if net_profit is None or net_profit <= 0:
+        return None
+    total: float = 0.0
+    for ev in events:
+        ev_type = ev.get("event_type")
+        cps = ev.get("cash_per_10_shares")
+        if ev_type not in ("cash_dividend", "combination"):
+            continue
+        if cps is None or cps <= 0:
+            continue
+        total += float(cps) / 10.0 * float(total_shares)
+    if total <= 0:
+        return None
+    return round(total / net_profit * 100, 2)
+
+
+def _sum_dividend_from_events(
+    events: list[dict[str, Any]],
+    total_shares: float | None,
+) -> float | None:
+    """从申报分红事件算申报分红总额(元):Σ(cash_per_10_shares / 10) × total_shares。
+
+    与 ``_compute_payout_from_events`` 同口径但**不**做百分比/舍入,返回原始绝对金额。
+    返回 None 时调用方应退回到现金流字段。无事件或 total_shares 无效时返回 None。
+    """
+    if not events or not total_shares or total_shares <= 0:
+        return None
+    total: float = 0.0
+    has_any = False
+    for ev in events:
+        ev_type = ev.get("event_type")
+        cps = ev.get("cash_per_10_shares")
+        if ev_type not in ("cash_dividend", "combination"):
+            continue
+        if cps is None or cps <= 0:
+            continue
+        total += float(cps) / 10.0 * float(total_shares)
+        has_any = True
+    return total if has_any else None
+
+
+def query_dividend_events(
+    stock_code: str, year: int, period: str = "FY",
+) -> list[dict[str, Any]]:
+    """查 capital_change_events 表,返回某年的现金分红事件列表。
+
+    返回字段:cash_per_10_shares, event_type, event_date, scheme_description。
+    失败(DB 异常/未连接)返回 []。
+    """
+    try:
+        conn = get_db()._duckdb_conn
+    except Exception:
+        return []
+    rows = conn.execute(
+        """
+        SELECT cash_per_10_shares, event_type, event_date, scheme_description
+        FROM capital_change_events
+        WHERE stock_code = ?
+          AND report_year = ?
+          AND report_period = ?
+          AND event_type IN ('cash_dividend', 'combination')
+          AND cash_per_10_shares IS NOT NULL
+          AND cash_per_10_shares > 0
+        ORDER BY event_date
+        """,
+        [stock_code, year, period],
+    ).fetchall()
+    return [
+        {
+            "cash_per_10_shares": r[0],
+            "event_type": r[1],
+            "event_date": r[2],
+            "scheme_description": r[3],
+        }
+        for r in rows
+    ]
+
+
+def query_dividend_events_by_year(
+    stock_code: str, start_year: int, end_year: int, period: str = "FY",
+) -> dict[str, list[dict[str, Any]]]:
+    """按年聚合 cash_dividend/combination 事件;返回 ``{year_str: [event_dict, ...]}``。
+
+    用于多年趋势图——每点的分红率优先按当年事件表计算,缺失时退到现金流字段。
+    """
+    try:
+        conn = get_db()._duckdb_conn
+    except Exception:
+        return {}
+    rows = conn.execute(
+        """
+        SELECT report_year, cash_per_10_shares, event_type, event_date,
+               scheme_description
+        FROM capital_change_events
+        WHERE stock_code = ?
+          AND report_year BETWEEN ? AND ?
+          AND report_period = ?
+          AND event_type IN ('cash_dividend', 'combination')
+          AND cash_per_10_shares IS NOT NULL
+          AND cash_per_10_shares > 0
+        ORDER BY report_year, event_date
+        """,
+        [stock_code, start_year, end_year, period],
+    ).fetchall()
+    result: dict[str, list[dict[str, Any]]] = {}
+    for r in rows:
+        d = {
+            "cash_per_10_shares": r[1],
+            "event_type": r[2],
+            "event_date": r[3],
+            "scheme_description": r[4],
+        }
+        result.setdefault(str(r[0]), []).append(d)
+    return result
+
+
+def fetch_total_shares_by_year(
+    stock_code: str, start_year: int, end_year: int, period: str = "FY",
+) -> dict[str, float]:
+    """按年聚合 share_structure.total_shares;返回 ``{year_str: shares}``。
+
+    注意:同一公司在不同年份的 total_shares 可能因送转/增发而变化——分年取值
+    才能让 ``(cash_per_10_shares / 10) × total_shares`` 算申报分红总额时用对股本。
+    """
+    try:
+        conn = get_db()._duckdb_conn
+    except Exception:
+        return {}
+    rows = conn.execute(
+        """
+        SELECT report_year, total_shares FROM share_structure
+        WHERE stock_code = ?
+          AND report_year BETWEEN ? AND ?
+          AND report_period = ?
+          AND total_shares IS NOT NULL
+        """,
+        [stock_code, start_year, end_year, period],
+    ).fetchall()
+    return {str(r[0]): float(r[1]) for r in rows if r[1] is not None}
+
+
+def extract_dividend_info(
+    financial_data: Dict[str, Any],
+    *,
+    dividend_events: list[dict[str, Any]] | None = None,
+    total_shares: float | None = None,
+) -> Dict[str, Any]:
+    """从财务数据 + 申报分红事件中提取分红相关信息。
 
     数据来源优先级：
-    1. 现金流量表 cash_for_dividend_and_interest（实际现金分红支出）
-    2. 计算自由现金流 = 经营活动现金流 - 购建固定资产现金支出
-    3. 净利润字段多别名（net_profit / net_profit_attributable_to_parent / total_profit）
+    1. **分红率分子**优先用 ``capital_change_events``(申报分红总额,无利息污染):
+       Σ(cash_per_10_shares / 10) × total_shares
+    2. 缺失/不传时回退到现金流量表 cash_for_dividend_and_interest(含利息,仅作估算)
+    3. 自由现金流 = 经营活动现金流 - 购建固定资产现金支出
+    4. 净利润字段多别名(net_profit / net_profit_attributable_to_parent / total_profit)
 
     Args:
-        financial_data: 财务数据字典（含 balance_sheet / income_statement / cash_flow）
+        financial_data: 财务数据字典(含 balance_sheet / income_statement / cash_flow)
+        dividend_events: 现金分红事件列表(可空),每条至少含
+            ``event_type``('cash_dividend' / 'combination')和 ``cash_per_10_shares``。
+        total_shares: 报告期总股本(股),用于把 cash_per_10_shares 换算到绝对金额。
 
     Returns:
-        分红信息字典
+        分红信息字典,额外带 ``payout_source`` 字段('capital_change_events' /
+        'cash_flow' / 'none')用于诊断当前走的是哪条路径。
     """
     income_statement = financial_data.get("income_statement", {})
     cash_flow = financial_data.get("cash_flow", {})
@@ -126,23 +292,44 @@ def extract_dividend_info(financial_data: Dict[str, Any]) -> Dict[str, Any]:
         or 0
     )
 
-    # 实际现金分红支出（来自现金流量表"分配股利、利润或偿付利息支付的现金"）
-    cash_dividend_paid = cash_flow.get("cash_for_dividend_and_interest", 0) or 0
-
     # 自由现金流 = 经营现金流 - 购建固定资产等资本支出
     capex = cash_flow.get("cash_for_fixed_assets", 0) or 0
     free_cash_flow = operating_cash_flow - capex
 
-    payout_ratio = (cash_dividend_paid / net_profit * 100) if net_profit > 0 else 0.0
-    fcf_coverage = (free_cash_flow / cash_dividend_paid) if cash_dividend_paid > 0 else 0.0
+    # 分子:优先用申报分红事件(events 纯净,无利息污染)
+    events_total = _sum_dividend_from_events(
+        dividend_events or [], total_shares,
+    )
+    if events_total is not None and events_total > 0:
+        # events 路径:从原始 cash_per_10_shares 直接算申报分红总额(不经过 payout_ratio 舍入)
+        cash_dividend_paid = events_total
+        payout_source = "capital_change_events"
+        payout_ratio = (
+            (cash_dividend_paid / net_profit * 100) if net_profit > 0 else 0.0
+        )
+    else:
+        # 退路:现金流量表(含利息,仅作估算)
+        cash_dividend_paid = (
+            cash_flow.get("cash_for_dividend_and_interest", 0) or 0
+        )
+        payout_source = "cash_flow"
+        payout_ratio = (
+            (cash_dividend_paid / net_profit * 100) if net_profit > 0 else 0.0
+        )
+
+    fcf_coverage = (
+        (free_cash_flow / cash_dividend_paid)
+        if cash_dividend_paid > 0 else 0.0
+    )
 
     return {
         "net_profit": net_profit,
         "operating_cash_flow": operating_cash_flow,
         "free_cash_flow": free_cash_flow,
-        "cash_dividend_paid": cash_dividend_paid,   # 实际现金分红支出（元）
-        "payout_ratio": round(payout_ratio, 2),      # 分红率（%）
-        "fcf_coverage": round(fcf_coverage, 2),      # 自由现金流对分红覆盖倍数
+        "cash_dividend_paid": cash_dividend_paid,
+        "payout_ratio": round(payout_ratio, 2),       # 分红率(%)
+        "fcf_coverage": round(fcf_coverage, 2),       # 自由现金流对分红覆盖倍数
+        "payout_source": payout_source,               # 'capital_change_events' / 'cash_flow'
     }
 
 
@@ -185,12 +372,17 @@ def render_dividend_trend_chart(
     output_path: str | Path,
     title: str | None = None,
     metric_explanations: dict[str, str] | None = None,
+    *,
+    dividend_events_by_year: dict[str, list[dict[str, Any]]] | None = None,
+    total_shares_by_year: dict[str, float] | None = None,
 ) -> tuple[Path, pd.DataFrame]:
     """把 dividend skill 的 multi_year_summary 渲染成 3 子图趋势 + 表格。
 
     子图 1: 营业收入(亿元)
     子图 2: 归母净利润(亿元)
-    子图 3: 分红率(%) = cash_for_dividend_and_interest / net_profit * 100
+    子图 3: 分红率(%) — 优先按当年 capital_change_events 算的申报分红
+            总额 / 归母净利润;事件缺失时退回到
+            cash_for_dividend_and_interest / net_profit × 100(估算,含利息)。
             缺失年份该指标为 None,subplot 自然跳过。
 
     Args:
@@ -201,8 +393,11 @@ def render_dividend_trend_chart(
         title: 整图标题。None 时使用通用默认"分红股关键指标趋势"。
         metric_explanations: {metric 显示名: 解释文本(计算公式/定义)},
             渲染到图片下方居中。常见用法:把分红率的计算公式传进来。
-            例:{"分红率(%)": "现金分红 / 归母净利润 × 100"}
+            例:{"分红率(%)": "申报分红 / 归母净利润 × 100 (来自 capital_change_events)"}
             None 或空 dict 不渲染。
+        dividend_events_by_year: {year_str: [event_dict, ...]},可选。
+            event_dict 字段:cash_per_10_shares (float), event_type (str)。
+        total_shares_by_year: {year_str: float},可选。events 路径需要。
 
     Returns:
         (chart_path, table) 二元组:
@@ -217,8 +412,19 @@ def render_dividend_trend_chart(
         net_profit = m.get("net_profit")
         cash_div = m.get("cash_for_dividend_and_interest")
         payout_ratio: float | None = None
-        if cash_div is not None and net_profit is not None and net_profit > 0:
+
+        # 优先 events 路径(无利息污染)
+        events_for_year = (dividend_events_by_year or {}).get(str(year), [])
+        shares_for_year = (total_shares_by_year or {}).get(str(year))
+        events_payout = _compute_payout_from_events(
+            events_for_year, shares_for_year, net_profit,
+        )
+        if events_payout is not None:
+            payout_ratio = events_payout
+        elif cash_div is not None and net_profit is not None and net_profit > 0:
+            # 退路:现金流字段(含利息,估算)
             payout_ratio = round(cash_div / net_profit * 100, 2)
+
         series[str(year)] = {
             "营业收入(亿元)": (
                 m["operating_revenue"] / 1e8
@@ -336,6 +542,7 @@ def build_dividend_markdown(
     stock_code: Optional[str] = None,
     report_year: Optional[int] = None,
     report_period: Optional[str] = None,
+    payout_ratio_override: Optional[float] = None,
 ) -> str:
     """把 dividend skill 的 LLM 结果 + 趋势图 + 趋势表渲染成自包含 markdown 报告。
 
@@ -360,6 +567,9 @@ def build_dividend_markdown(
                None 或空 DataFrame 时跳过一、表。
         company_name / stock_code / report_year / report_period: 用于标题与元数据;
             缺省时回落到 "未知xxx"。
+        payout_ratio_override: 用 skill 算的(events 表口径)分红率覆盖 LLM 输出。
+            缺省时用 ``result.get("payout_ratio")``;典型用法:skill.py 把自己算的
+            payout_ratio 传进来,避免 LLM 估算出偏差。
 
     Returns:
         完整 markdown 字符串(UTF-8,LF 换行)。
@@ -396,9 +606,15 @@ def build_dividend_markdown(
     trend_lines += ["---", ""]
 
     # 3. 二、关键指标
+    # 分红率优先用 skill 算的(events 口径,无利息污染),回落到 LLM 输出
+    payout_value = (
+        payout_ratio_override
+        if payout_ratio_override is not None
+        else result.get("payout_ratio")
+    )
     key_rows = [
         ("股息率(%)", result.get("dividend_yield")),
-        ("分红率(%)", result.get("payout_ratio")),
+        ("分红率(%)", payout_value),
         ("连续分红年限(年)", result.get("dividend_stability_years")),
         ("自由现金流对分红覆盖率(倍)", result.get("cash_flow_coverage")),
         ("财务健康度评分(0-100)", result.get("financial_health_score")),

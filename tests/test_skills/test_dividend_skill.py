@@ -6,8 +6,14 @@ import pytest
 
 from src.skills import run_skill
 from src.skills.dividend.tools import (
+    _compute_payout_from_events,
     _round_half_up,
+    _sum_dividend_from_events,
     build_dividend_markdown,
+    extract_dividend_info,
+    query_dividend_events,
+    query_dividend_events_by_year,
+    render_dividend_trend_chart,
 )
 
 
@@ -344,6 +350,200 @@ def test_llm_result_metrics_rounded_to_two_decimals():
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# 分红率分子:capital_change_events 路径
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def test_sum_dividend_from_events_basic():
+    """_sum_dividend_from_events:Σ(cash_per_10_shares / 10) × total_shares。"""
+    events = [
+        {"event_type": "cash_dividend", "cash_per_10_shares": 5.0},
+        # bonus_share 不含现金,跳过
+        {"event_type": "bonus_share", "cash_per_10_shares": 3.0},
+    ]
+    # 1 亿股,每 10 股派 5 元 → 5000 万
+    assert _sum_dividend_from_events(events, 1e8) == 5e7
+
+    # 同时有 combination 事件(送转+派息)也要算
+    events2 = [
+        {"event_type": "cash_dividend", "cash_per_10_shares": 3.0},
+        {"event_type": "combination", "cash_per_10_shares": 2.0},
+    ]
+    # 1 亿股,5 元/10 股 → 5000 万
+    assert _sum_dividend_from_events(events2, 1e8) == 5e7
+
+    # 0 股或 None
+    assert _sum_dividend_from_events(events, None) is None
+    assert _sum_dividend_from_events(events, 0) is None
+    # 空事件
+    assert _sum_dividend_from_events([], 1e8) is None
+    # cash_per_10_shares 为 0 或负数
+    assert _sum_dividend_from_events(
+        [{"event_type": "cash_dividend", "cash_per_10_shares": 0}], 1e8,
+    ) is None
+
+
+def test_compute_payout_from_events_basic():
+    """_compute_payout_from_events:申报分红总额 / 净利 × 100。"""
+    # 1 亿股,每 10 股派 5 元,净利 1 亿 → 5000万/1亿 = 50%
+    events = [{"event_type": "cash_dividend", "cash_per_10_shares": 5.0}]
+    assert _compute_payout_from_events(events, 1e8, 1e8) == 50.0
+
+    # 多笔合计
+    events2 = [
+        {"event_type": "cash_dividend", "cash_per_10_shares": 3.0},
+        {"event_type": "combination", "cash_per_10_shares": 2.0},
+    ]
+    # 1 亿股,5 元/10 股,净利 1 亿 → 50%
+    assert _compute_payout_from_events(events2, 1e8, 1e8) == 50.0
+
+    # 净利为 0 / 负 / None → 返回 None
+    assert _compute_payout_from_events(events, 1e8, 0) is None
+    assert _compute_payout_from_events(events, 1e8, -1e6) is None
+    assert _compute_payout_from_events(events, 1e8, None) is None
+    # total_shares 缺失
+    assert _compute_payout_from_events(events, None, 1e8) is None
+    # 无事件
+    assert _compute_payout_from_events([], 1e8, 1e8) is None
+
+
+def test_extract_dividend_info_uses_events_when_provided():
+    """传 events + total_shares 时,payout_ratio 走 events 路径。"""
+    financial_data = {
+        "income_statement": {"net_profit": 1e9},     # 净利 10 亿
+        "cash_flow": {
+            "net_cash_from_operations": 1.2e9,
+            "cash_for_fixed_assets": 3e8,
+            # 现金流字段故意给一个干扰值:含利息,会高估
+            "cash_for_dividend_and_interest": 7e8,  # 若用这个,7e8/1e9=70%
+        },
+    }
+    # events 路径:每 10 股派 5 元,1 亿股 → 5000 万 → 5%
+    events = [{"event_type": "cash_dividend", "cash_per_10_shares": 5.0}]
+    info = extract_dividend_info(
+        financial_data, dividend_events=events, total_shares=1e8,
+    )
+    assert info["payout_source"] == "capital_change_events"
+    assert info["payout_ratio"] == 5.0
+    assert info["cash_dividend_paid"] == 5e7  # 申报分红总额
+
+
+def test_extract_dividend_info_falls_back_to_cash_flow():
+    """不传 events 时退回到 cash_for_dividend_and_interest 字段。"""
+    financial_data = {
+        "income_statement": {"net_profit": 1e9},
+        "cash_flow": {
+            "net_cash_from_operations": 1.2e9,
+            "cash_for_dividend_and_interest": 6e8,
+        },
+    }
+    info = extract_dividend_info(financial_data)
+    assert info["payout_source"] == "cash_flow"
+    assert info["payout_ratio"] == 60.0
+    assert info["cash_dividend_paid"] == 6e8
+
+
+def test_extract_dividend_info_events_empty_falls_back():
+    """events 列表为空(当年没分红)时退回到现金流字段。"""
+    financial_data = {
+        "income_statement": {"net_profit": 1e9},
+        "cash_flow": {"cash_for_dividend_and_interest": 4e8},
+    }
+    info = extract_dividend_info(
+        financial_data, dividend_events=[], total_shares=1e8,
+    )
+    assert info["payout_source"] == "cash_flow"
+    assert info["payout_ratio"] == 40.0
+
+
+def test_render_dividend_trend_chart_uses_events_per_year(tmp_path):
+    """多年趋势图:有 events 的年份走 events,无 events 退到现金流。"""
+    multi_year_summary = {
+        "2022": {
+            "operating_revenue": 4e9, "net_profit": 8e8,
+            "cash_for_dividend_and_interest": 6e8,  # 若用这个 75%
+        },
+        "2023": {
+            "operating_revenue": 5e9, "net_profit": 1e9,
+            "cash_for_dividend_and_interest": 5e8,  # 无 events,退到这 50%
+        },
+        "2024": {
+            "operating_revenue": 6e9, "net_profit": 1.2e9,
+            "cash_for_dividend_and_interest": 4e8,  # 有 events,5%
+        },
+    }
+    events_by_year = {
+        # 2022:每 10 股派 6 元,1 亿股 → 6e7
+        "2022": [{"event_type": "cash_dividend", "cash_per_10_shares": 6.0}],
+        # 2024:每 10 股派 5 元,1.2 亿股 → 6e7
+        "2024": [{"event_type": "cash_dividend", "cash_per_10_shares": 5.0}],
+        # 2023 没事件,缺
+    }
+    shares_by_year = {"2022": 1e8, "2023": 1.1e8, "2024": 1.2e8}
+
+    out = tmp_path / "events_trend.png"
+    chart_path, table = render_dividend_trend_chart(
+        multi_year_summary, out,
+        dividend_events_by_year=events_by_year,
+        total_shares_by_year=shares_by_year,
+    )
+    assert chart_path == out
+    assert out.exists()
+    # 表里 payout_ratio:2022→7.5%(6e7/8e8*100),2023→50%(退到现金流),2024→5%(6e7/1.2e9*100)
+    # 注意 2023 用的是现金流 5e8/1e9=50%
+    payout_col = table["分红率(%)"]
+    assert payout_col["2022"] == 7.5
+    assert payout_col["2023"] == 50.0
+    assert payout_col["2024"] == 5.0
+
+
+def test_render_dividend_trend_chart_no_events_falls_back_to_cash_flow(tmp_path):
+    """完全不传 events 时,趋势图照旧用 cash_for_dividend_and_interest。"""
+    multi_year_summary = {
+        "2023": {
+            "operating_revenue": 5e9, "net_profit": 1e9,
+            "cash_for_dividend_and_interest": 5e8,
+        },
+    }
+    out = tmp_path / "no_events.png"
+    _, table = render_dividend_trend_chart(multi_year_summary, out)
+    assert table["分红率(%)"]["2023"] == 50.0
+
+
+def test_build_dividend_markdown_payout_ratio_override():
+    """payout_ratio_override 优先于 result['payout_ratio'](LLM 输出)。"""
+    result = dict(_FULL_RESULT, payout_ratio=99.0)  # LLM 估错
+    md_no_override = build_dividend_markdown(
+        result, chart_path=None, table=None,
+        company_name="X", stock_code="000001", report_year=2024,
+    )
+    # 没 override 时,99 出现在「分红率(%)」行
+    assert "99.00" in md_no_override
+
+    md_with_override = build_dividend_markdown(
+        result, chart_path=None, table=None,
+        company_name="X", stock_code="000001", report_year=2024,
+        payout_ratio_override=42.5,
+    )
+    # 有 override 时,99 不再出现,42.5 出现
+    assert "99.00" not in md_with_override
+    assert "42.50" in md_with_override
+
+
+def test_query_dividend_events_db_failure_returns_empty():
+    """DB 异常时 query_dividend_events 返回空列表,不抛错。"""
+    # 没 mock get_db,默认 _duckdb_conn 不存在 → except → []
+    result = query_dividend_events("999999", 2024, "FY")
+    assert result == []
+
+
+def test_query_dividend_events_by_year_db_failure_returns_empty():
+    """DB 异常时 query_dividend_events_by_year 返回空 dict。"""
+    result = query_dividend_events_by_year("999999", 2020, 2024, "FY")
+    assert result == {}
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # skill 集成:验证 dividend skill run() 成功后写独立 markdown 报告
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -420,6 +620,22 @@ def test_skill_writes_dividend_markdown_report(tmp_path, monkeypatch):
         "src.skills.dividend.skill._fetch_total_shares",
         lambda *a, **k: 1e9,
     )
+    # events 路径:申报分红事件 + 多年度 shares
+    # 净利 1e8,total_shares 1e9,每 10 股派 0.5 元 → 5e7 → 50% 分红率
+    monkeypatch.setattr(
+        "src.skills.dividend.skill.query_dividend_events",
+        lambda *a, **k: [{"event_type": "cash_dividend", "cash_per_10_shares": 0.5}],
+    )
+    monkeypatch.setattr(
+        "src.skills.dividend.skill.query_dividend_events_by_year",
+        lambda *a, **k: {
+            "2023": [{"event_type": "cash_dividend", "cash_per_10_shares": 0.5}],
+        },
+    )
+    monkeypatch.setattr(
+        "src.skills.dividend.skill.fetch_total_shares_by_year",
+        lambda *a, **k: {"2023": 1e9},
+    )
 
     # ── mock LLM 链 ──
     llm_result = dict(_FULL_RESULT, investment_rating="BUY", reasoning="分红稳")
@@ -487,3 +703,135 @@ def test_skill_writes_dividend_markdown_report(tmp_path, monkeypatch):
     # 5. LLM 结论段存在
     assert "**投资评级: BUY**" in content
     assert "分红稳" in content
+
+    # 6. events 路径:skill 把 payout_source 写进 input_context.markdown 上下文
+    #    注意 save_skill_result 的 input_context 已被 captured_ctx 捕获
+    #    (但 dividend_info.payout_source 本身在 analysis_metrics 里,需要从 captured 推算;
+    #     我们直接验证 captured_ctx 间接行为:payout_ratio 走 events 路径后值是 50.00)
+    # 净利 1e8, total_shares 1e9, 每 10 股 0.5 元 → 5e7 → 50.00%
+    assert "50.00" in content, "events 路径的 payout_ratio 50.00% 应在 markdown 中"
+    # 现金流字段(5e7)算的 50% 跟 events 算的 50% 数值碰巧相同,所以额外验证:
+    # 把 LLM 的 payout_ratio 改成 99,看 skill 是否用自己的 events 值覆盖
+    # (这条断言在另一个独立 test 里覆盖)
+
+
+def test_skill_payout_ratio_override_llm_value(tmp_path, monkeypatch):
+    """端到端:LLM 估错的 payout_ratio(99%)会被 skill 用 events 算的 50% 覆盖。
+
+    验证 build_dividend_markdown 的 payout_ratio_override 在 skill run() 里真的传了进来。
+    """
+    from unittest.mock import MagicMock
+
+    stock_code = "999998"
+    company_name = "覆盖测试"
+
+    monkeypatch.chdir(tmp_path)
+    memory_dir = tmp_path / "data" / stock_code / "memory"
+    memory_dir.mkdir(parents=True)
+
+    monkeypatch.setattr(
+        "src.skills.dividend.skill.get_all_financial_data",
+        lambda **kw: {
+            "balance_sheet": {"total_assets": 1e10},
+            "income_statement": {"net_profit": 1e8, "operating_revenue": 5e8},
+            "cash_flow": {
+                "net_cash_from_operations": 1.2e8,
+                "cash_for_dividend_and_interest": 5e7,
+            },
+        },
+    )
+    monkeypatch.setattr(
+        "src.skills.dividend.skill.get_multi_year_financial_data",
+        lambda **kw: {
+            "2024": {
+                "consolidated_income_statement": {"operating_revenue": 5e8, "net_profit": 1e8},
+                "consolidated_cash_flow_statement": {"net_cash_from_operations": 1.2e8, "cash_for_dividend_and_interest": 5e7},
+                "consolidated_balance_sheet": {"total_assets": 1e10},
+            },
+        },
+    )
+    monkeypatch.setattr(
+        "src.skills.dividend.skill.calculate_profitability",
+        lambda inc, bs: {},
+    )
+    monkeypatch.setattr(
+        "src.skills.dividend.skill.calculate_liquidity",
+        lambda bs: {},
+    )
+    monkeypatch.setattr(
+        "src.skills.dividend.skill.calculate_solvency",
+        lambda bs, inc: {},
+    )
+    monkeypatch.setattr(
+        "src.skills.dividend.skill.get_stock_market_data",
+        lambda code: {"pe_pb_history": []},
+    )
+    monkeypatch.setattr(
+        "src.skills.dividend.skill.get_dividend_stats_with_fallback",
+        lambda code, years=5: {},
+    )
+    monkeypatch.setattr(
+        "src.skills.dividend.skill.compute_dividend_stability_years",
+        lambda *a, **k: 5,
+    )
+    monkeypatch.setattr(
+        "src.skills.dividend.skill._fetch_total_shares",
+        lambda *a, **k: 1e9,
+    )
+    monkeypatch.setattr(
+        "src.skills.dividend.skill.query_dividend_events",
+        lambda *a, **k: [{"event_type": "cash_dividend", "cash_per_10_shares": 0.5}],
+    )
+    monkeypatch.setattr(
+        "src.skills.dividend.skill.query_dividend_events_by_year",
+        lambda *a, **k: {},
+    )
+    monkeypatch.setattr(
+        "src.skills.dividend.skill.fetch_total_shares_by_year",
+        lambda *a, **k: {},
+    )
+
+    # LLM 估错:输出 payout_ratio=99
+    llm_result = dict(
+        _FULL_RESULT,
+        investment_rating="BUY", reasoning="ok",
+        payout_ratio=99.0,  # 错的
+    )
+
+    fake_chain = MagicMock()
+    fake_chain.invoke.return_value = llm_result
+
+    class _Chain:
+        def __init__(self, inner):
+            self._inner = inner
+        def __or__(self, other):
+            return self
+        def invoke(self, x):
+            return self._inner.invoke(x)
+
+    monkeypatch.setattr(
+        "src.skills.dividend.skill.ChatPromptTemplate.from_messages",
+        lambda msgs: _Chain(fake_chain),
+    )
+    monkeypatch.setattr(
+        "src.skills.dividend.skill.save_skill_result",
+        lambda *a, **k: True,
+    )
+
+    from src.skills import run_skill
+    state = {
+        "company_name": company_name,
+        "stock_code": stock_code,
+        "report_year": 2024,
+        "report_period": "FY",
+    }
+    delta = run_skill("dividend", state, llm=MagicMock())
+    assert "error_msg" not in delta
+
+    md_file = memory_dir / f"分析报告_分红_{company_name}_{stock_code}_2024.md"
+    assert md_file.exists()
+    content = md_file.read_text(encoding="utf-8")
+    # LLM 的 99 必须没出现在 markdown(被 skill 的 events 值 50 覆盖)
+    assert "99.00" not in content, "LLM 估错的 payout_ratio 99% 应被覆盖"
+    # events 算的 50 应该出现
+    assert "50.00" in content, "skill events 算的 50% 应在 markdown 中"

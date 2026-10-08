@@ -15,8 +15,11 @@ from src.skills.dividend.tools import (
     build_dividend_markdown,
     compute_dividend_stability_years,
     extract_dividend_info,
+    fetch_total_shares_by_year,
     filter_financial_data,
     get_dividend_stats_with_fallback,
+    query_dividend_events,
+    query_dividend_events_by_year,
     render_dividend_trend_chart,
 )
 
@@ -157,8 +160,23 @@ def run(
         liquidity = calculate_liquidity(balance_sheet)
         solvency = calculate_solvency(balance_sheet, income_statement)
 
-        # 3. 提取分红相关数据（现金流量表 + akshare 历史分红）
-        dividend_info = extract_dividend_info(financial_data)
+        # 3. 提取分红相关数据
+        # 优先用 capital_change_events(申报分红总额,无利息污染),
+        # events 缺失时退回到 extract_dividend_info 内部的现金流字段。
+        cur_dividend_events: list[dict[str, Any]] = []
+        cur_total_shares: float | None = None
+        if stock_code and report_year:
+            cur_dividend_events = query_dividend_events(
+                stock_code, report_year, report_period or "FY",
+            )
+            cur_total_shares = _fetch_total_shares(
+                stock_code, report_year, report_period,
+            )
+        dividend_info = extract_dividend_info(
+            financial_data,
+            dividend_events=cur_dividend_events or None,
+            total_shares=cur_total_shares,
+        )
 
         # 4. 获取市场数据（股价、PE、PB、股息率）
         market_data: Dict[str, Any] = {}
@@ -181,9 +199,9 @@ def run(
             dividend_info["pe_ratio"] = None  # akshare get_stock_pe_pb_history 不返回 PE
             dividend_info["market_cap"] = None  # 同上
 
-            # 总股本从 share_structure 取（缺失时 dividend_yield 无法准确算）
-            total_shares = _fetch_total_shares(stock_code, report_year, report_period)
-            dividend_info["total_shares"] = total_shares
+            # 总股本:已在第 3 步用 _fetch_total_shares 取过,这里复用 cur_total_shares。
+            # (保留 dividend_info["total_shares"] 字段供 LLM 算股息率。)
+            dividend_info["total_shares"] = cur_total_shares
 
             # 连续分红年限：从 capital_change_events 反推
             stability_years = compute_dividend_stability_years(
@@ -270,16 +288,32 @@ def run(
                 chart_dir.mkdir(parents=True, exist_ok=True)
                 png_path = chart_dir / f"dividend_trend_{report_year}.png"
                 csv_path = png_path.with_suffix(".csv")
+
+                # 多年度 events(每年申报分红事件 + 当年总股本),用于按年算
+                # 申报分红总额——分子纯净,不含现金流量表里的偿付利息。
+                start_year = report_year - (years_window - 1)
+                period_str = report_period or "FY"
+                events_by_year = query_dividend_events_by_year(
+                    stock_code, start_year, report_year, period_str,
+                )
+                shares_by_year = fetch_total_shares_by_year(
+                    stock_code, start_year, report_year, period_str,
+                )
+
                 _, trend_table = render_dividend_trend_chart(
                     multi_year_summary, png_path,
                     title=f"{company_name} - 分红股关键指标趋势",
                     metric_explanations={
                         "分红率(%)": (
-                            "现金分红 / 归母净利润 × 100 "
-                            "(现金分红取自合并现金流量表 "
-                            "'分配股利、利润或偿付利息支付的现金')"
+                            "申报分红 / 归母净利润 × 100 "
+                            "(申报分红 = Σ (每10股派息 / 10) × 当年总股本, "
+                            "取自 capital_change_events 表的 cash_dividend / "
+                            "combination 事件;事件缺失年份退回到 "
+                            "cash_for_dividend_and_interest 字段,仅作估算)"
                         ),
                     },
+                    dividend_events_by_year=events_by_year or None,
+                    total_shares_by_year=shares_by_year or None,
                 )
                 trend_table.to_csv(csv_path, index_label="年份")
                 chart_path = str(png_path)
@@ -315,6 +349,9 @@ def run(
                     stock_code=stock_code,
                     report_year=report_year,
                     report_period=report_period,
+                    # skill 自己算的 payout_ratio(events 口径)覆盖 LLM 输出,
+                    # 避免 LLM 估算与 trend chart 同年点不一致。
+                    payout_ratio_override=dividend_info.get("payout_ratio"),
                 )
                 md_path.write_text(md_content, encoding="utf-8")
                 markdown_path = str(md_path)
