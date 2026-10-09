@@ -132,6 +132,26 @@ def _compute_payout_from_events(
     return round(total / net_profit * 100, 2)
 
 
+def _is_financial_data_empty(
+    financial_data: dict[str, Any] | None,
+    keys: tuple[str, ...] = (
+        "balance_sheet", "income_statement", "cash_flow",
+    ),
+) -> bool:
+    """判断财务数据是否实质为空(所有 3 张表都没有任何非 None 字段)。
+
+    用于 fail-fast:PDF 解析失败或数据未入库时,3 张表全空,
+    不让 skill 继续算 0% 噪音指标并写入 DB / markdown。
+    """
+    if not financial_data:
+        return True
+    for key in keys:
+        table = financial_data.get(key)
+        if isinstance(table, dict) and any(v is not None for v in table.values()):
+            return False
+    return True
+
+
 def _sum_dividend_from_events(
     events: list[dict[str, Any]],
     total_shares: float | None,

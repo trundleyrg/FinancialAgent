@@ -21,6 +21,7 @@ from src.skills.dividend.tools import (
     query_dividend_events,
     query_dividend_events_by_year,
     render_dividend_trend_chart,
+    _is_financial_data_empty,
 )
 
 
@@ -119,6 +120,21 @@ def run(
             year=report_year,
             period=report_period,
         )
+
+        # 1a. fail-fast:3 张表全空(PDF 解析失败 / 数据未入库)时直接
+        # return,避免后续算出 0% payout_ratio 等噪音指标写进 DB / markdown。
+        if _is_financial_data_empty(financial_data):
+            logger.error(
+                "财务数据为空 (%s %s %s),无法进行红利股分析",
+                company_name, report_year, report_period,
+            )
+            return {
+                "dividend_analysis": None,
+                "error_msg": (
+                    f"财务数据为空({company_name} {report_year} "
+                    f"{report_period or '未知'}),无法进行红利股分析"
+                ),
+            }
 
         balance_sheet = financial_data.get("balance_sheet", {})
         income_statement = financial_data.get("income_statement", {})

@@ -9,6 +9,7 @@ from src.skills.dividend.tools import (
     _build_dividend_extra_columns,
     _compute_payout_from_events,
     _fmt_split_qty,
+    _is_financial_data_empty,
     _round_half_up,
     _sum_dividend_from_events,
     build_dividend_markdown,
@@ -966,6 +967,135 @@ def test_skill_writes_dividend_markdown_report(tmp_path, monkeypatch):
     # 现金流字段(5e7)算的 50% 跟 events 算的 50% 数值碰巧相同,所以额外验证:
     # 把 LLM 的 payout_ratio 改成 99,看 skill 是否用自己的 events 值覆盖
     # (这条断言在另一个独立 test 里覆盖)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# fail-fast:财务数据全空(PDF 解析失败)时直接 return error_delta
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def test_is_financial_data_empty_helper():
+    """_is_financial_data_empty 各边界。"""
+    # 全 None
+    assert _is_financial_data_empty({}) is True
+    assert _is_financial_data_empty(None) is True
+    assert _is_financial_data_empty({
+        "balance_sheet": {},
+        "income_statement": {},
+        "cash_flow": {},
+    }) is True
+    # 3 张表都只含 None 值
+    assert _is_financial_data_empty({
+        "balance_sheet": {"total_assets": None},
+        "income_statement": {"net_profit": None},
+        "cash_flow": {"net_cash_from_operations": None},
+    }) is True
+    # 至少一张表有一个非 None 字段 → 不算空
+    assert _is_financial_data_empty({
+        "balance_sheet": {},
+        "income_statement": {"net_profit": 1e8},
+        "cash_flow": {},
+    }) is False
+    assert _is_financial_data_empty({
+        "balance_sheet": {"total_assets": 1e10},
+        "income_statement": {},
+        "cash_flow": {},
+    }) is False
+    # 缺某张表(但其它表有数据)→ 不算空
+    assert _is_financial_data_empty({
+        "balance_sheet": {"total_assets": 1e10},
+    }) is False
+
+
+def test_skill_fails_fast_when_financial_data_empty(monkeypatch, tmp_path):
+    """财务数据 3 张表全空(PDF 解析失败)时,skill 直接 return error_delta。
+
+    验证:
+    1. dividend_analysis = None
+    2. error_msg 含"财务数据为空"
+    3. 不调用 LLM(避免无意义大 prompt)
+    4. 不写 markdown 文件
+    5. 不调用 save_skill_result(避免把噪音写进 DB)
+    """
+    from unittest.mock import MagicMock
+
+    monkeypatch.chdir(tmp_path)
+    memory_dir = tmp_path / "data" / "000423" / "memory"
+    memory_dir.mkdir(parents=True)
+
+    # 财务数据全空(模拟 PDF 解析失败)
+    monkeypatch.setattr(
+        "src.skills.dividend.skill.get_all_financial_data",
+        lambda **kw: {
+            "balance_sheet": {},
+            "income_statement": {},
+            "cash_flow": {},
+        },
+    )
+
+    # LLM 链不应被调用 → 用一个会爆炸的 mock,真调用就 throw
+    class ExplodingLLM:
+        def invoke(self, *a, **k):
+            raise AssertionError("LLM 不应被调用")
+
+    save_called = []
+
+    def fake_save(*a, **k):
+        save_called.append(a)
+        return True
+
+    monkeypatch.setattr(
+        "src.skills.dividend.skill.save_skill_result", fake_save,
+    )
+
+    state = {
+        "company_name": "空数据公司",
+        "stock_code": "000423",
+        "report_year": 2024,
+        "report_period": "FY",
+    }
+    delta = run_skill("dividend", state, llm=ExplodingLLM())
+
+    # 1. + 2. error_delta 形状
+    assert delta["dividend_analysis"] is None
+    assert "财务数据为空" in delta["error_msg"]
+    # error_msg 应含公司名 + 年份(用于排查时定位)
+    assert "空数据公司" in delta["error_msg"]
+    assert "2024" in delta["error_msg"]
+
+    # 3. LLM 没被调用(若调用会 throw,test 失败)
+    # 4. 没写 markdown 文件
+    md_files = list(memory_dir.glob("分析报告_分红_*.md"))
+    assert md_files == [], f"不应写 markdown,但写了: {md_files}"
+
+    # 5. save_skill_result 也没被调用
+    assert save_called == [], f"save_skill_result 不应被调用,但调用了: {save_called}"
+
+
+def test_skill_fails_fast_when_financial_data_none(monkeypatch, tmp_path):
+    """更彻底的 fail-fast:get_all_financial_data 直接返回 None(数据完全未入库)。"""
+    monkeypatch.chdir(tmp_path)
+    memory_dir = tmp_path / "data" / "000423" / "memory"
+    memory_dir.mkdir(parents=True)
+
+    monkeypatch.setattr(
+        "src.skills.dividend.skill.get_all_financial_data",
+        lambda **kw: None,
+    )
+
+    class ExplodingLLM:
+        def invoke(self, *a, **k):
+            raise AssertionError("LLM 不应被调用")
+
+    state = {
+        "company_name": "X",
+        "stock_code": "000423",
+        "report_year": 2024,
+        "report_period": "FY",
+    }
+    delta = run_skill("dividend", state, llm=ExplodingLLM())
+    assert delta["dividend_analysis"] is None
+    assert "财务数据为空" in delta["error_msg"]
 
 
 def test_skill_payout_ratio_override_llm_value(tmp_path, monkeypatch):
