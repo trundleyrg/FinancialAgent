@@ -6,7 +6,9 @@ import pytest
 
 from src.skills import run_skill
 from src.skills.dividend.tools import (
+    _build_dividend_extra_columns,
     _compute_payout_from_events,
+    _fmt_split_qty,
     _round_half_up,
     _sum_dividend_from_events,
     build_dividend_markdown,
@@ -541,6 +543,257 @@ def test_query_dividend_events_by_year_db_failure_returns_empty():
     """DB 异常时 query_dividend_events_by_year 返回空 dict。"""
     result = query_dividend_events_by_year("999999", 2020, 2024, "FY")
     assert result == {}
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 趋势表扩列:分红总金额 + 拆股情况
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def test_fmt_split_qty_integer_vs_decimal():
+    """_fmt_split_qty:整数无小数,小数保留 1 位。"""
+    assert _fmt_split_qty(3.0) == "3"
+    assert _fmt_split_qty(0.0) == "0"
+    assert _fmt_split_qty(2.5) == "2.5"
+    assert _fmt_split_qty(1.25) == "1.2"  # 四舍五入到 1 位
+    assert _fmt_split_qty(7.0) == "7"
+
+
+def test_build_dividend_extra_columns_no_split_no_cash():
+    """无 events + 无 cash_for_dividend:金额=0,拆股=无。"""
+    m = {"2023": {"cash_for_dividend_and_interest": None}}
+    extras = _build_dividend_extra_columns(m, {}, {})
+    assert extras["分红总金额(亿元)"] == [0.0]
+    assert extras["拆股情况"] == ["无"]
+
+
+def test_build_dividend_extra_columns_only_cash():
+    """纯现金分红(无送转):金额走 events 路径,拆股=无。"""
+    m = {
+        "2023": {
+            "cash_for_dividend_and_interest": 5e7,  # 5e7 = 0.5 亿
+        },
+    }
+    # 1 亿股,每 10 股派 5 元 → 5e7 元 = 0.5 亿
+    events = {"2023": [{"event_type": "cash_dividend", "cash_per_10_shares": 5.0}]}
+    extras = _build_dividend_extra_columns(m, events, {"2023": 1e8})
+    assert extras["分红总金额(亿元)"] == [0.5]
+    assert extras["拆股情况"] == ["无"]
+
+
+def test_build_dividend_extra_columns_bonus_only():
+    """纯送股(无现金):事件没有 cash,金额退到现金流字段(0),拆股=10送3。"""
+    m = {
+        "2023": {"cash_for_dividend_and_interest": 0},
+    }
+    events = {
+        "2023": [{
+            "event_type": "bonus_share",
+            "cash_per_10_shares": None,
+            "bonus_shares_per_10": 3.0,
+        }],
+    }
+    extras = _build_dividend_extra_columns(m, events, {"2023": 1e8})
+    assert extras["分红总金额(亿元)"] == [0.0]  # 无 cash
+    assert extras["拆股情况"] == ["10送3"]
+
+
+def test_build_dividend_extra_columns_combination_event():
+    """combination 事件(送+派):金额 + 拆股都填。"""
+    m = {"2023": {"cash_for_dividend_and_interest": 0}}
+    # 1 亿股,每 10 股派 5 元送 2 股转 1 股
+    events = {
+        "2023": [{
+            "event_type": "combination",
+            "cash_per_10_shares": 5.0,
+            "bonus_shares_per_10": 2.0,
+            "capitalized_shares_per_10": 1.0,
+        }],
+    }
+    extras = _build_dividend_extra_columns(m, events, {"2023": 1e8})
+    assert extras["分红总金额(亿元)"] == [0.5]   # 5e7 = 0.5 亿
+    assert extras["拆股情况"] == ["10送2转1"]
+
+
+def test_build_dividend_extra_columns_capitalized_only():
+    """纯转增(无送无派):拆股=10转2,金额=0。"""
+    m = {"2023": {"cash_for_dividend_and_interest": 0}}
+    events = {
+        "2023": [{
+            "event_type": "capitalized_share",
+            "cash_per_10_shares": None,
+            "capitalized_shares_per_10": 2.0,
+        }],
+    }
+    extras = _build_dividend_extra_columns(m, events, {"2023": 1e8})
+    assert extras["分红总金额(亿元)"] == [0.0]
+    assert extras["拆股情况"] == ["10转2"]
+
+
+def test_build_dividend_extra_columns_multi_year_ordered():
+    """多年数据按 sorted(years) 顺序,columns 顺序对齐。"""
+    m = {
+        "2024": {"cash_for_dividend_and_interest": 6e7},
+        "2022": {"cash_for_dividend_and_interest": 4e7},
+        "2023": {"cash_for_dividend_and_interest": 5e7},
+    }
+    events = {
+        "2022": [{"event_type": "cash_dividend", "cash_per_10_shares": 4.0}],
+        "2023": [{"event_type": "cash_dividend", "cash_per_10_shares": 5.0}],
+        "2024": [{"event_type": "cash_dividend", "cash_per_10_shares": 6.0}],
+    }
+    shares = {"2022": 1e8, "2023": 1e8, "2024": 1e8}
+    extras = _build_dividend_extra_columns(m, events, shares)
+    # sorted 顺序:2022, 2023, 2024
+    assert extras["分红总金额(亿元)"] == [0.4, 0.5, 0.6]
+    assert extras["拆股情况"] == ["无", "无", "无"]
+
+
+def test_render_dividend_trend_chart_returns_5_col_table(tmp_path):
+    """trend chart 返回的 DataFrame 有 5 列(3 数字 + 2 文字/扩展)。"""
+    multi_year_summary = {
+        "2023": {
+            "operating_revenue": 5e9, "net_profit": 1e9,
+            "cash_for_dividend_and_interest": 5e7,
+        },
+        "2024": {
+            "operating_revenue": 6e9, "net_profit": 1.2e9,
+            "cash_for_dividend_and_interest": 6e7,
+        },
+    }
+    events_by_year = {
+        "2023": [{"event_type": "cash_dividend", "cash_per_10_shares": 5.0}],
+        "2024": [{
+            "event_type": "combination",
+            "cash_per_10_shares": 5.0,
+            "bonus_shares_per_10": 2.0,
+            "capitalized_shares_per_10": 1.0,
+        }],
+    }
+    shares_by_year = {"2023": 1e8, "2024": 1e8}
+    out = tmp_path / "five_col.png"
+    chart_path, table = render_dividend_trend_chart(
+        multi_year_summary, out,
+        dividend_events_by_year=events_by_year,
+        total_shares_by_year=shares_by_year,
+    )
+    assert chart_path == out
+    assert out.exists()
+    # 5 列
+    assert list(table.columns) == [
+        "营业收入(亿元)", "归母净利润(亿元)", "分红率(%)",
+        "分红总金额(亿元)", "拆股情况",
+    ]
+    # 拆股情况:2023=无(纯派现),2024=10送2转1
+    assert table["拆股情况"]["2023"] == "无"
+    assert table["拆股情况"]["2024"] == "10送2转1"
+    # 分红总金额:2023=0.5亿,2024=0.5亿
+    assert table["分红总金额(亿元)"]["2023"] == 0.5
+    assert table["分红总金额(亿元)"]["2024"] == 0.5
+
+
+def test_skill_markdown_includes_extra_table_columns(tmp_path, monkeypatch):
+    """端到端:skill 写出的 markdown 表格包含新 2 列。"""
+    from unittest.mock import MagicMock
+
+    stock_code = "999997"
+    company_name = "扩列测试"
+
+    monkeypatch.chdir(tmp_path)
+    memory_dir = tmp_path / "data" / stock_code / "memory"
+    memory_dir.mkdir(parents=True)
+
+    monkeypatch.setattr(
+        "src.skills.dividend.skill.get_all_financial_data",
+        lambda **kw: {
+            "balance_sheet": {"total_assets": 1e10},
+            "income_statement": {"net_profit": 1e8, "operating_revenue": 5e8},
+            "cash_flow": {
+                "net_cash_from_operations": 1.2e8,
+                "cash_for_dividend_and_interest": 5e7,
+            },
+        },
+    )
+    monkeypatch.setattr(
+        "src.skills.dividend.skill.get_multi_year_financial_data",
+        lambda **kw: {
+            "2023": {
+                "consolidated_income_statement": {"operating_revenue": 5e8, "net_profit": 1e8},
+                "consolidated_cash_flow_statement": {"net_cash_from_operations": 1.2e8, "cash_for_dividend_and_interest": 5e7},
+                "consolidated_balance_sheet": {"total_assets": 1e10},
+            },
+            "2024": {
+                "consolidated_income_statement": {"operating_revenue": 6e8, "net_profit": 1.2e8},
+                "consolidated_cash_flow_statement": {"net_cash_from_operations": 1.5e8, "cash_for_dividend_and_interest": 6e7},
+                "consolidated_balance_sheet": {"total_assets": 1.1e10},
+            },
+        },
+    )
+    monkeypatch.setattr("src.skills.dividend.skill.calculate_profitability", lambda *a, **k: {})
+    monkeypatch.setattr("src.skills.dividend.skill.calculate_liquidity", lambda *a, **k: {})
+    monkeypatch.setattr("src.skills.dividend.skill.calculate_solvency", lambda *a, **k: {})
+    monkeypatch.setattr("src.skills.dividend.skill.get_stock_market_data", lambda *a, **k: {"pe_pb_history": []})
+    monkeypatch.setattr("src.skills.dividend.skill.get_dividend_stats_with_fallback", lambda *a, **k: {})
+    monkeypatch.setattr("src.skills.dividend.skill.compute_dividend_stability_years", lambda *a, **k: 5)
+    monkeypatch.setattr("src.skills.dividend.skill._fetch_total_shares", lambda *a, **k: 1e8)
+    # 2023:纯派现(每 10 股 5 元,1 亿股 → 5e7 → 0.5 亿)
+    # 2024:送转+派息(每 10 股派 5 元送 2 转 1,1.2 亿股 → 6e7 → 0.5 亿)
+    monkeypatch.setattr(
+        "src.skills.dividend.skill.query_dividend_events",
+        lambda *a, **k: [
+            {"event_type": "combination", "cash_per_10_shares": 5.0,
+             "bonus_shares_per_10": 2.0, "capitalized_shares_per_10": 1.0},
+        ],
+    )
+    monkeypatch.setattr(
+        "src.skills.dividend.skill.query_dividend_events_by_year",
+        lambda *a, **k: {
+            "2023": [{"event_type": "cash_dividend", "cash_per_10_shares": 5.0,
+                      "bonus_shares_per_10": 0.0, "capitalized_shares_per_10": 0.0}],
+            "2024": [{"event_type": "combination", "cash_per_10_shares": 5.0,
+                      "bonus_shares_per_10": 2.0, "capitalized_shares_per_10": 1.0}],
+        },
+    )
+    monkeypatch.setattr(
+        "src.skills.dividend.skill.fetch_total_shares_by_year",
+        lambda *a, **k: {"2023": 1e8, "2024": 1.2e8},
+    )
+
+    fake_chain = MagicMock()
+    fake_chain.invoke.return_value = dict(
+        _FULL_RESULT, investment_rating="BUY", reasoning="ok",
+    )
+
+    class _Chain:
+        def __init__(self, inner): self._inner = inner
+        def __or__(self, other): return self
+        def invoke(self, x): return self._inner.invoke(x)
+
+    monkeypatch.setattr(
+        "src.skills.dividend.skill.ChatPromptTemplate.from_messages",
+        lambda msgs: _Chain(fake_chain),
+    )
+    monkeypatch.setattr(
+        "src.skills.dividend.skill.save_skill_result", lambda *a, **k: True,
+    )
+
+    state = {
+        "company_name": company_name, "stock_code": stock_code,
+        "report_year": 2024, "report_period": "FY",
+    }
+    delta = run_skill("dividend", state, llm=MagicMock())
+    assert "error_msg" not in delta
+
+    md_file = memory_dir / f"分析报告_分红_{company_name}_{stock_code}_2024.md"
+    content = md_file.read_text(encoding="utf-8")
+    # 新 2 列的表头必须出现
+    assert "分红总金额(亿元)" in content
+    assert "拆股情况" in content
+    # 2023 拆股=无,2024 拆股=10送2转1
+    assert "| 无 |" in content
+    assert "10送2转1" in content
+    # 金额(亿元)四舍五入 2 位
+    assert "0.50" in content
 
 
 # ──────────────────────────────────────────────────────────────────────────────

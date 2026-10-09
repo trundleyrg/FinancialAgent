@@ -157,12 +157,70 @@ def _sum_dividend_from_events(
     return total if has_any else None
 
 
+def _fmt_split_qty(qty: float) -> str:
+    """10送/转数量显示:整数无小数,小数保留 1 位。例:3.0→"3"、2.5→"2.5"。"""
+    if qty == int(qty):
+        return str(int(qty))
+    return f"{qty:.1f}"
+
+
+def _build_dividend_extra_columns(
+    multi_year_summary: dict[str, dict[str, Any]],
+    events_by_year: dict[str, list[dict[str, Any]]] | None,
+    total_shares_by_year: dict[str, float] | None,
+) -> dict[str, list[Any]]:
+    """给趋势表追加 2 列(不影响 3 列 chart series):
+    - 分红总金额(亿元):events 路径优先,退到 cash_for_dividend_and_interest 字段
+    - 拆股情况:"10送X转Y" / "10送X" / "10转Y" / "无"
+
+    返回的 list 顺序与 ``sorted(multi_year_summary.keys())`` 对齐,直接
+    喂给 ``pd.DataFrame[列名] = ...`` 即可扩展表格。
+    """
+    years = sorted(multi_year_summary.keys())
+    amounts: list[float] = []
+    splits: list[str] = []
+    for y in years:
+        events = (events_by_year or {}).get(str(y), [])
+        shares = (total_shares_by_year or {}).get(str(y))
+
+        # 分红总金额:events 算的绝对金额(元)→ 亿元
+        total_yuan = _sum_dividend_from_events(events, shares)
+        if total_yuan is None or total_yuan <= 0:
+            cash_div = (multi_year_summary.get(y) or {}).get(
+                "cash_for_dividend_and_interest"
+            )
+            total_yuan = float(cash_div) if cash_div else 0.0
+        amounts.append(round(total_yuan / 1e8, 2))  # 元 → 亿元
+
+        # 拆股情况:按年累计送股 + 转增
+        bonus = sum(float(ev.get("bonus_shares_per_10") or 0) for ev in events)
+        cap = sum(
+            float(ev.get("capitalized_shares_per_10") or 0) for ev in events
+        )
+        if bonus > 0 and cap > 0:
+            splits.append(
+                f"10送{_fmt_split_qty(bonus)}转{_fmt_split_qty(cap)}"
+            )
+        elif bonus > 0:
+            splits.append(f"10送{_fmt_split_qty(bonus)}")
+        elif cap > 0:
+            splits.append(f"10转{_fmt_split_qty(cap)}")
+        else:
+            splits.append("无")
+
+    return {
+        "分红总金额(亿元)": amounts,
+        "拆股情况": splits,
+    }
+
+
 def query_dividend_events(
     stock_code: str, year: int, period: str = "FY",
 ) -> list[dict[str, Any]]:
     """查 capital_change_events 表,返回某年的现金分红事件列表。
 
-    返回字段:cash_per_10_shares, event_type, event_date, scheme_description。
+    返回字段:cash_per_10_shares, bonus_shares_per_10, capitalized_shares_per_10,
+    event_type, event_date, scheme_description。
     失败(DB 异常/未连接)返回 []。
     """
     try:
@@ -171,14 +229,19 @@ def query_dividend_events(
         return []
     rows = conn.execute(
         """
-        SELECT cash_per_10_shares, event_type, event_date, scheme_description
+        SELECT cash_per_10_shares, bonus_shares_per_10, capitalized_shares_per_10,
+               event_type, event_date, scheme_description
         FROM capital_change_events
         WHERE stock_code = ?
           AND report_year = ?
           AND report_period = ?
-          AND event_type IN ('cash_dividend', 'combination')
-          AND cash_per_10_shares IS NOT NULL
-          AND cash_per_10_shares > 0
+          AND event_type IN (
+              'cash_dividend', 'bonus_share',
+              'capitalized_share', 'combination'
+          )
+          AND (cash_per_10_shares > 0
+               OR bonus_shares_per_10 > 0
+               OR capitalized_shares_per_10 > 0)
         ORDER BY event_date
         """,
         [stock_code, year, period],
@@ -186,9 +249,11 @@ def query_dividend_events(
     return [
         {
             "cash_per_10_shares": r[0],
-            "event_type": r[1],
-            "event_date": r[2],
-            "scheme_description": r[3],
+            "bonus_shares_per_10": r[1],
+            "capitalized_shares_per_10": r[2],
+            "event_type": r[3],
+            "event_date": r[4],
+            "scheme_description": r[5],
         }
         for r in rows
     ]
@@ -200,6 +265,8 @@ def query_dividend_events_by_year(
     """按年聚合 cash_dividend/combination 事件;返回 ``{year_str: [event_dict, ...]}``。
 
     用于多年趋势图——每点的分红率优先按当年事件表计算,缺失时退到现金流字段。
+    包含送股/转增字段(bonus_shares_per_10, capitalized_shares_per_10)以支持
+    拆股情况汇总。
     """
     try:
         conn = get_db()._duckdb_conn
@@ -207,15 +274,20 @@ def query_dividend_events_by_year(
         return {}
     rows = conn.execute(
         """
-        SELECT report_year, cash_per_10_shares, event_type, event_date,
+        SELECT report_year, cash_per_10_shares, bonus_shares_per_10,
+               capitalized_shares_per_10, event_type, event_date,
                scheme_description
         FROM capital_change_events
         WHERE stock_code = ?
           AND report_year BETWEEN ? AND ?
           AND report_period = ?
-          AND event_type IN ('cash_dividend', 'combination')
-          AND cash_per_10_shares IS NOT NULL
-          AND cash_per_10_shares > 0
+          AND event_type IN (
+              'cash_dividend', 'bonus_share',
+              'capitalized_share', 'combination'
+          )
+          AND (cash_per_10_shares > 0
+               OR bonus_shares_per_10 > 0
+               OR capitalized_shares_per_10 > 0)
         ORDER BY report_year, event_date
         """,
         [stock_code, start_year, end_year, period],
@@ -224,9 +296,11 @@ def query_dividend_events_by_year(
     for r in rows:
         d = {
             "cash_per_10_shares": r[1],
-            "event_type": r[2],
-            "event_date": r[3],
-            "scheme_description": r[4],
+            "bonus_shares_per_10": r[2],
+            "capitalized_shares_per_10": r[3],
+            "event_type": r[4],
+            "event_date": r[5],
+            "scheme_description": r[6],
         }
         result.setdefault(str(r[0]), []).append(d)
     return result
@@ -402,8 +476,10 @@ def render_dividend_trend_chart(
     Returns:
         (chart_path, table) 二元组:
         - chart_path: 写入的 PNG 路径(Path)。
-        - table: build_trend_table() 的结果(DataFrame),
-                 index=年份字符串(字典序), columns=3 个 metric(中文 label)。
+        - table: 趋势 DataFrame,index=年份字符串(字典序),包含 5 列:
+                 营业收入(亿元) / 归母净利润(亿元) / 分红率(%) /
+                 分红总金额(亿元) / 拆股情况。
+                 前 3 列用于绘图(line plot 不吃字符串),后 2 列只展示在表里。
     """
     from src.tools.visualization import render_trend_chart_and_table
 
@@ -435,13 +511,21 @@ def render_dividend_trend_chart(
             ),
             "分红率(%)": payout_ratio,
         }
-    return render_trend_chart_and_table(
+    chart_path, table = render_trend_chart_and_table(
         series,
         output_path=output_path,
         title=title if title is not None else "分红股关键指标趋势",
         x_label="年份",
         metric_explanations=metric_explanations,
     )
+
+    # 追加 2 列到 table:分红总金额 + 拆股情况(只展示,不进 chart)
+    extras = _build_dividend_extra_columns(
+        multi_year_summary, dividend_events_by_year, total_shares_by_year,
+    )
+    for col_name, col_data in extras.items():
+        table[col_name] = col_data
+    return chart_path, table
 
 
 # ──────────────────────────────────────────────────────────────────────────────
