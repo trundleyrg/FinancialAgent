@@ -5,6 +5,7 @@
 """
 import json
 import os
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, List, Optional
@@ -49,13 +50,113 @@ def extract_analysis_results(entries: List[Dict[str, Any]]) -> Dict[str, Any]:
     return results
 
 
-def build_markdown_report(results: Dict[str, Any]) -> str:
-    """将分析结果拼接成 Markdown 报告"""
+def load_dividend_data(memory_dir: str | Path) -> Optional[Dict[str, Any]]:
+    """从 memory_dir 里读最新的 `分析报告_分红_*.md`,提取趋势表 + 关键指标。
+
+    返回 dict:
+        {
+            "source_md_name": str,
+            "trend_table_md": str,    # 完整 markdown 表格(含表头+分隔行+数据行)
+            "key_indicators": dict,   # {"股息率(%)": "4.50", ...}
+            "risk_factors": list[str],
+            "investment_rating": str, # "BUY" / "HOLD" / "SELL"
+        }
+        或 None(没找到 dividend md 时)
+
+    这是主报告整合 dividend 分析的桥梁:dividend skill 自己已生成独立 markdown,
+    我们这里再把它的事实数字(趋势表)+ 判断结果(评级/风险)汇总进主报告。
+    """
+    memory_dir = Path(memory_dir)
+    if not memory_dir.is_dir():
+        return None
+
+    md_files = sorted(memory_dir.glob("分析报告_分红_*.md"))
+    if not md_files:
+        return None
+    latest = md_files[-1]
+    text = latest.read_text(encoding="utf-8")
+
+    # ── 趋势表 ──
+    # 找 markdown 表格块(以 | 开头的连续行)
+    table_lines: list[str] = []
+    in_table = False
+    for line in text.splitlines():
+        if line.startswith("|"):
+            table_lines.append(line)
+            in_table = True
+        elif in_table and line.strip() == "":
+            # 表格结束
+            break
+        elif in_table and not line.startswith("|"):
+            # 表格结束了
+            break
+    trend_table_md = "\n".join(table_lines) if table_lines else ""
+
+    # ── 关键指标(## 二、关键指标 段) ──
+    key_indicators: Dict[str, str] = {}
+    m = re.search(
+        r"## 二、关键指标\s*\n(.+?)(?=\n##|\Z)",
+        text, re.DOTALL,
+    )
+    if m:
+        section = m.group(1)
+        for row in re.findall(r"\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|", section):
+            name, value = row
+            n = name.strip()
+            v = value.strip()
+            # 跳过空、分隔行(---)以及 markdown 表头本身(指标 / 数值)
+            if not n or not v or "---" in n or "---" in v:
+                continue
+            if n in ("指标", "数值"):
+                continue
+            key_indicators[n] = v
+
+    # ── 风险因素(## 六、风险因素 段) ──
+    risk_factors: list[str] = []
+    m = re.search(
+        r"## 六、风险因素\s*\n(.+?)(?=\n##|\Z)",
+        text, re.DOTALL,
+    )
+    if m:
+        for line in m.group(1).splitlines():
+            line = line.strip()
+            if line.startswith("- "):
+                risk_factors.append(line[2:].strip())
+
+    # ── 投资评级 ──
+    investment_rating = ""
+    m = re.search(r"\*\*投资评级:\s*([A-Z]+)\*\*", text)
+    if m:
+        investment_rating = m.group(1).strip()
+
+    return {
+        "source_md_name": latest.name,
+        "trend_table_md": trend_table_md,
+        "key_indicators": key_indicators,
+        "risk_factors": risk_factors,
+        "investment_rating": investment_rating,
+    }
+
+
+def build_markdown_report(
+    results: Dict[str, Any],
+    memory_dir: str | Path | None = None,
+) -> str:
+    """将分析结果拼接成 Markdown 报告
+
+    Args:
+        results: extract_analysis_results 返回的 dict
+        memory_dir: 用于查找 `分析报告_分红_*.md` 等子产物,
+            找到则嵌入「红利股分析」section;None 或没找到则跳过该 section。
+    """
     session = results.get("session_info", {})
     classification = results.get("classification", {})
     cyclical = results.get("cyclical_analysis") or {}
     fundamental = results.get("fundamental_analysis") or {}
     summary = results.get("summary") or {}
+
+    # 红利股分析数据(从独立的分红 markdown 报告里抓)
+    dividend = load_dividend_data(memory_dir) if memory_dir else None
 
     # 时间戳
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -157,8 +258,93 @@ def build_markdown_report(results: Dict[str, Any]) -> str:
 {fundamental.get('reasoning', '暂无分析理由')}
 
 ---
+"""
+    # ── 四、红利股分析(可选,依赖 memory_dir 下有没有 dividend 报告) ──
+    dividend_section = ""
+    tail = ""
+    if dividend and (dividend.get("trend_table_md") or dividend.get("key_indicators")):
+        div_table = dividend.get("trend_table_md") or "*(趋势表缺失)*"
+        div_indicators = dividend.get("key_indicators") or {}
+        div_risks = dividend.get("risk_factors") or []
+        div_rating = dividend.get("investment_rating") or "N/A"
+        div_source = dividend.get("source_md_name", "")
 
-## 四、综合投资建议
+        if div_indicators:
+            indicator_rows = "\n".join(
+                f"| {k} | {v} |" for k, v in div_indicators.items()
+            )
+            indicator_table = indicator_rows  # 仅数据行,表头在外层模板里
+        else:
+            indicator_table = "| 数值 | N/A |"
+
+        risk_md = (
+            "\n".join(f"- {r}" for r in div_risks) if div_risks else "- 暂无"
+        )
+
+        dividend_section = f"""## 四、红利股分析
+
+> 数据来源: `{div_source}`(由 dividend skill 独立生成,本报告汇总展示)
+
+### 4.1 多年关键指标趋势(分红)
+
+{div_table}
+
+> **口径说明**:分红率(%) = 现金分红总额 / 归母净利润 × 100。
+  送转股(10送X / 10转X)未折算进比率,详见「拆股情况」列。
+
+### 4.2 当年关键指标
+
+| 指标 | 数值 |
+|------|------|
+{indicator_table}
+
+### 4.3 分红风险因素
+
+{risk_md}
+
+### 4.4 分红评级
+
+**投资评级: {div_rating}**
+
+---
+"""
+
+    # 综合投资建议 + 分析方法说明(编号随 dividend 是否存在而平移)
+    if dividend_section:
+        tail = f"""## 五、综合投资建议
+
+### 5.1 最终评级
+
+**{summary.get('final_rating', 'N/A')}**
+
+### 5.2 核心亮点
+
+{chr(10).join([f'- {highlight}' for highlight in summary.get('key_highlights', [])]) or '- 暂无'}
+
+### 5.3 风险提示
+
+{chr(10).join([f'- {risk}' for risk in summary.get('risk_factors', [])]) or '- 暂无'}
+
+### 5.4 投资建议
+
+{summary.get('investment_suggestion', '暂无投资建议')}
+
+---
+
+## 六、分析方法说明
+
+本报告由 **FinancialAgent** 智能投研系统生成，采用以下分析方法：
+
+1. **股票类型分类**: 基于公司经营范围关键词匹配，识别股票类型（周期股/成长股/防御股等）
+2. **周期股分析**: 评估行业周期位置、产能利用率、现金流健康度、PB/CAPE 估值
+3. **基本面分析**: 多维度财务指标分析（盈利、流动性、偿债、成长、效率）
+4. **红利股分析**: 分红历史、连续年限、股息率与分红率、自由现金流覆盖率
+5. **综合汇总**: 基于多维度分析给出最终投资建议
+
+---
+"""
+    else:
+        tail = f"""## 四、综合投资建议
 
 ### 4.1 最终评级
 
@@ -188,9 +374,9 @@ def build_markdown_report(results: Dict[str, Any]) -> str:
 4. **综合汇总**: 基于多维度分析给出最终投资建议
 
 ---
-
-> 本报告仅供参考，不构成投资建议。投资有风险，决策需谨慎。
 """
+
+    md += dividend_section + tail + "\n> 本报告仅供参考，不构成投资建议。投资有风险，决策需谨慎。\n"
     return md
 
 
@@ -231,8 +417,8 @@ def save_analysis_report(
     filename = f"分析报告_{company}_{code}_{timestamp}.md"
     output_path = os.path.join(output_dir, filename)
 
-    # 构建并保存报告
-    md_content = build_markdown_report(results)
+    # 构建并保存报告(memory_dir = jsonl 同目录,用于查找 `分析报告_分红_*.md`)
+    md_content = build_markdown_report(results, memory_dir=output_dir)
 
     with open(output_path, 'w', encoding='utf-8') as f:
         f.write(md_content)
