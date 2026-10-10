@@ -67,18 +67,19 @@ def test_dividend_stability_years_unknown_stock_is_zero():
 # ----- share_structure fetcher -----
 
 def test_fetch_share_structure_000423_local_derivation_disabled():
-    """🚨 _from_local_derivation 已禁用,只剩 akshare 路径。
+    """🚨 _from_local_derivation 已禁用,只剩 akshare + PDF 路径。
 
     真实场景:000423 2024 FY ——
         任何来源下,本地推导不再被使用(系统偏差不可消除),
-        source 只能是 "akshare_spot"(成功)或 "none"(失败)。
+        source 可以是 "akshare_spot"(成功)/ "pdf_year_report"(PDF 兜底)/
+        "none"(全部失败)。
     """
     data = fetch_share_structure("000423", 2024, "FY")
     # local_derivation 已禁用,不应再出现
     assert data["source"] != "local_derivation", (
         "_from_local_derivation 已禁用,但 fetch_share_structure 仍返回 source='local_derivation'"
     )
-    assert data["source"] in ("akshare_spot", "none")
+    assert data["source"] in ("akshare_spot", "pdf_year_report", "none")
 
 
 def test_fetch_and_persist_skips_when_akshare_unavailable():
