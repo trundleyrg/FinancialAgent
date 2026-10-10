@@ -545,6 +545,16 @@ def render_dividend_trend_chart(
     )
     for col_name, col_data in extras.items():
         table[col_name] = col_data
+
+    # ── 列顺序重排:派生指标(分红率)挪到最后一列 ────────────────────────
+    # 默认顺序:[营业收入, 归母净利润, 分红率, 分红总金额, 拆股情况]
+    # 期望顺序:[营业收入, 归母净利润, 分红总金额, 拆股情况, 分红率]
+    # 理由:阅读流 = 基本面 → 派息结构 → 派生比率
+    _payout_col = "分红率(%)"
+    if _payout_col in table.columns:
+        ordered_cols = [c for c in table.columns if c != _payout_col] + [_payout_col]
+        table = table[ordered_cols]
+
     return chart_path, table
 
 
@@ -703,6 +713,14 @@ def build_dividend_markdown(
         trend_lines.append("")
     if table is not None and not table.empty:
         trend_lines.append(_df_to_markdown_table(table))
+        trend_lines.append("")
+        # 口径注释:分红率 = 现金分红 / 归母净利润,送转股未折算进比率,
+        # 防止投资者误读(纯派现股票 100% 准确,送转股票偏低)。
+        trend_lines.append(
+            "> **口径说明**:分红率(%) = 现金分红总额 / 归母净利润 × 100。"
+            "送转股(10送X / 10转X)未折算进比率,"
+            "详见「拆股情况」列。"
+        )
         trend_lines.append("")
     if not chart_path and (table is None or table.empty):
         trend_lines.append("*（趋势图/表数据缺失）*")

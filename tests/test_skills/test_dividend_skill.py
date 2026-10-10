@@ -680,10 +680,10 @@ def test_render_dividend_trend_chart_returns_5_col_table(tmp_path):
     )
     assert chart_path == out
     assert out.exists()
-    # 5 列
+    # 5 列 — 分红率(派生指标)放最后一列,阅读流:基本面 → 派息结构 → 比率
     assert list(table.columns) == [
-        "营业收入(亿元)", "归母净利润(亿元)", "分红率(%)",
-        "分红总金额(亿元)", "拆股情况",
+        "营业收入(亿元)", "归母净利润(亿元)",
+        "分红总金额(亿元)", "拆股情况", "分红率(%)",
     ]
     # 拆股情况:2023=无(纯派现),2024=10送2转1
     assert table["拆股情况"]["2023"] == "无"
@@ -1218,3 +1218,66 @@ def test_skill_payout_ratio_override_llm_value(tmp_path, monkeypatch):
     assert "99.00" not in content, "LLM 估错的 payout_ratio 99% 应被覆盖"
     # events 算的 50 应该出现
     assert "50.00" in content, "skill events 算的 50% 应在 markdown 中"
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 趋势表列顺序:分红率挪到最后一列 + markdown 加口径注释
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def test_render_dividend_trend_chart_payout_ratio_column_is_last(tmp_path):
+    """分红率(%) 应是趋势表的最后一列 — 派生指标放末尾,事实指标(营收/净利/派息/拆股)放前面。
+
+    当前 bug:列顺序 = [营业收入, 归母净利润, 分红率, 分红总金额, 拆股情况],
+    派生指标(分红率)在中间,违反"先看基本面→再看派息结构→最后看比率"的阅读流。
+    期望顺序:[营业收入, 归母净利润, 分红总金额, 拆股情况, 分红率]。
+    """
+    multi_year_summary = {
+        "2023": {"operating_revenue": 5e9, "net_profit": 1e9,
+                    "cash_for_dividend_and_interest": 5e8},
+        "2024": {"operating_revenue": 6e9, "net_profit": 1.2e9,
+                    "cash_for_dividend_and_interest": 6e7},
+    }
+    out = tmp_path / "test_col_order.png"
+    chart_path, table = render_dividend_trend_chart(multi_year_summary, out)
+
+    expected_order = [
+        "营业收入(亿元)", "归母净利润(亿元)",
+        "分红总金额(亿元)", "拆股情况", "分红率(%)",
+    ]
+    assert list(table.columns) == expected_order, (
+        f"列顺序应={expected_order},实际={list(table.columns)}; "
+        f"分红率(派生指标)应在最后一列"
+    )
+    # 分红率值仍可访问(位置不影响内容)
+    assert "分红率(%)" in table.columns
+    payout_col = table["分红率(%)"]
+    assert payout_col["2023"] is not None
+    assert payout_col["2024"] is not None
+
+
+def test_build_dividend_markdown_includes_payout_ratio_calculation_note():
+    """趋势表后必须有口径注释:「分红率仅计现金分红,送转股未折算」。
+
+    防止投资者误读:严格 payout_ratio = cash / net_profit,
+    送股/转增虽在「拆股情况」列展示了,但未折算进分红率。
+    """
+    md = build_dividend_markdown(
+        _FULL_RESULT,
+        chart_path="charts/dividend_trend_2024.png",
+        table=_sample_table(),
+        company_name="东阿阿胶",
+        stock_code="000423",
+        report_year=2024,
+    )
+    # 注释必须出现且含关键警告
+    assert "口径说明" in md, "趋势表后应注明计算口径"
+    assert "现金分红" in md
+    assert "送转股" in md or "送股" in md
+    assert "未折算" in md
+    # 注释应在「## 一、关键指标趋势」之后、「## 二、关键指标」之前
+    trend_section_pos = md.index("## 一、关键指标趋势")
+    next_section_pos = md.index("## 二、", trend_section_pos)
+    note_pos = md.find("口径说明")
+    assert note_pos > trend_section_pos, "注释应在一、关键指标趋势之后"
+    assert note_pos < next_section_pos, "注释应在二、关键指标之前"
