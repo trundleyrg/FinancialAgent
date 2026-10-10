@@ -66,30 +66,58 @@ def test_dividend_stability_years_unknown_stock_is_zero():
 
 # ----- share_structure fetcher -----
 
-def test_fetch_share_structure_000423_local_derivation():
-    """akshare 不可达时本地推导 000423 总股本。"""
+def test_fetch_share_structure_000423_local_derivation_disabled():
+    """🚨 _from_local_derivation 已禁用,只剩 akshare 路径。
+
+    真实场景:000423 2024 FY ——
+        任何来源下,本地推导不再被使用(系统偏差不可消除),
+        source 只能是 "akshare_spot"(成功)或 "none"(失败)。
+    """
     data = fetch_share_structure("000423", 2024, "FY")
-    # akshare 当前网络不通，期望 source 退化到 local_derivation 或 akshare_spot 至少一个
-    assert data["source"] in ("akshare_spot", "local_derivation")
-    if data["source"] == "local_derivation":
-        assert data["total_shares"] is not None
-        # 14.79 亿股 = 1,479,184,875
-        assert 1.4e9 < data["total_shares"] < 1.55e9
+    # local_derivation 已禁用,不应再出现
+    assert data["source"] != "local_derivation", (
+        "_from_local_derivation 已禁用,但 fetch_share_structure 仍返回 source='local_derivation'"
+    )
+    assert data["source"] in ("akshare_spot", "none")
 
 
-def test_fetch_and_persist_share_structure_writes_row():
-    """fetch_and_persist 应在 share_structure 表中写入/覆盖一行。"""
+def test_fetch_and_persist_skips_when_akshare_unavailable():
+    """🚨 当 akshare 不可达且本地推导已禁用,fetch_and_persist 必须返回 False。
+
+    这条线保护的关键不变量:网络失败/推导被禁用时,
+    **绝不能用脏数据覆盖已存在的 share_structure 行**(000423 真实 6.44 亿)。
+
+    若返回 True 并覆盖真实数据 → dividend skill 后续分析会被污染。
+    """
     ok = fetch_and_persist("000423", 2024, "FY")
-    assert ok is True
-    conn = get_db()._duckdb_conn
-    row = conn.execute(
-        """
-        SELECT total_shares FROM share_structure
-        WHERE stock_code='000423' AND report_year=2024 AND report_period='FY'
-        """,
-    ).fetchone()
-    assert row is not None
-    assert row[0] is not None
+    # 网络不可达时,akshare 失败 + 推导已禁用 → 应返回 False
+    if ok is True:
+        # 仅在 akshare 真拿到了数据时才写入,这是允许的
+        conn = get_db()._duckdb_conn
+        row = conn.execute(
+            """
+            SELECT total_shares FROM share_structure
+            WHERE stock_code='000423' AND report_year=2024 AND report_period='FY'
+            """,
+        ).fetchone()
+        assert row is not None and row[0] is not None
+    else:
+        # akshare 失败路径:不应有 delete_record 与 UPDATE 触达 share_structure
+        # 现有正确数据保持不变
+        conn = get_db()._duckdb_conn
+        row = conn.execute(
+            """
+            SELECT total_shares FROM share_structure
+            WHERE stock_code='000423' AND report_year=2024 AND report_period='FY'
+            """,
+        ).fetchone()
+        # 如果之前手工入库过,值应是真实 6.44 亿(不是 7.78 / 14.79)
+        if row and row[0]:
+            # 偏离真实 6.44 亿 ±5% 以内,说明数据未被脏写入覆盖
+            assert abs(row[0] - 643_976_824) / 643_976_824 < 0.05, (
+                f"share_structure 000423 2024 应≈6.44 亿,实际 {row[0]:.0f} "
+                f"(偏离 {(row[0]-643_976_824)/643_976_824*100:.1f}%)"
+            )
 
 
 # ----- 端到端 skill -----
