@@ -356,6 +356,7 @@ def extract_dividend_info(
     *,
     dividend_events: list[dict[str, Any]] | None = None,
     total_shares: float | None = None,
+    current_price: float | None = None,
 ) -> Dict[str, Any]:
     """从财务数据 + 申报分红事件中提取分红相关信息。
 
@@ -371,10 +372,13 @@ def extract_dividend_info(
         dividend_events: 现金分红事件列表(可空),每条至少含
             ``event_type``('cash_dividend' / 'combination')和 ``cash_per_10_shares``。
         total_shares: 报告期总股本(股),用于把 cash_per_10_shares 换算到绝对金额。
+        current_price: 当前股价(元/股),用于算股息率。缺/无效 → dividend_yield=None。
 
     Returns:
-        分红信息字典,额外带 ``payout_source`` 字段('capital_change_events' /
-        'cash_flow' / 'none')用于诊断当前走的是哪条路径。
+        分红信息字典,含 ``payout_source`` ('capital_change_events'/'cash_flow') 与
+        ``dividend_yield`` (None 或 %).股息率口径:
+            yield = per_share_dividend / current_price × 100
+            per_share_dividend = cash_dividend_paid / total_shares
     """
     income_statement = financial_data.get("income_statement", {})
     cash_flow = financial_data.get("cash_flow", {})
@@ -416,6 +420,19 @@ def extract_dividend_info(
         if cash_dividend_paid > 0 else 0.0
     )
 
+    # 股息率:每股分红 / 当前股价 × 100
+    # 缺 current_price / total_shares / cash_dividend 时返回 None,不强算
+    dividend_yield: float | None = None
+    if (
+        current_price is not None
+        and current_price > 0
+        and total_shares is not None
+        and total_shares > 0
+        and cash_dividend_paid > 0
+    ):
+        per_share_dividend = cash_dividend_paid / total_shares
+        dividend_yield = round(per_share_dividend / current_price * 100, 2)
+
     return {
         "net_profit": net_profit,
         "operating_cash_flow": operating_cash_flow,
@@ -424,6 +441,7 @@ def extract_dividend_info(
         "payout_ratio": round(payout_ratio, 2),       # 分红率(%)
         "fcf_coverage": round(fcf_coverage, 2),       # 自由现金流对分红覆盖倍数
         "payout_source": payout_source,               # 'capital_change_events' / 'cash_flow'
+        "dividend_yield": dividend_yield,             # 股息率(%) — code 算,缺数据时 None
     }
 
 
@@ -657,6 +675,7 @@ def build_dividend_markdown(
     report_year: Optional[int] = None,
     report_period: Optional[str] = None,
     payout_ratio_override: Optional[float] = None,
+    dividend_yield_override: Optional[float] = None,
 ) -> str:
     """把 dividend skill 的 LLM 结果 + 趋势图 + 趋势表渲染成自包含 markdown 报告。
 
@@ -734,8 +753,13 @@ def build_dividend_markdown(
         if payout_ratio_override is not None
         else result.get("payout_ratio")
     )
+    yield_value = (
+        dividend_yield_override
+        if dividend_yield_override is not None
+        else result.get("dividend_yield")
+    )
     key_rows = [
-        ("股息率(%)", result.get("dividend_yield")),
+        ("股息率(%)", yield_value),
         ("分红率(%)", payout_value),
         ("连续分红年限(年)", result.get("dividend_stability_years")),
         ("自由现金流对分红覆盖率(倍)", result.get("cash_flow_coverage")),

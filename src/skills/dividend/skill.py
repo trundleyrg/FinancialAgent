@@ -188,18 +188,15 @@ def run(
             cur_total_shares = _fetch_total_shares(
                 stock_code, report_year, report_period,
             )
-        dividend_info = extract_dividend_info(
-            financial_data,
-            dividend_events=cur_dividend_events or None,
-            total_shares=cur_total_shares,
-        )
 
-        # 4. 获取市场数据（股价、PE、PB、股息率）
+        # 4. 获取市场数据（股价、PE、PB、股息率）— 先于 extract_dividend_info
+        # 因为股息率 = per_share / current_price × 100,需要股价才能算。
         market_data: Dict[str, Any] = {}
+        current_price: float | None = None
+        pb_ratio: float | None = None
         if stock_code:
             market_data = get_stock_market_data(stock_code)
             dividend_stats = get_dividend_stats_with_fallback(stock_code, years=5)
-            dividend_info["market_dividend_stats"] = dividend_stats
 
             # 扁平化：从 pe_pb_history 取最近一日的 close/pb，
             # basic_info 不直接含 PE/PB/市值，置为 None 让 LLM 自行处理。
@@ -210,13 +207,22 @@ def run(
             )
             current_price = (latest or {}).get("close")
             pb_ratio = (latest or {}).get("pb")
+
+        dividend_info = extract_dividend_info(
+            financial_data,
+            dividend_events=cur_dividend_events or None,
+            total_shares=cur_total_shares,
+            current_price=current_price,  # code 算 dividend_yield 用
+        )
+
+        if stock_code:
+            dividend_info["market_dividend_stats"] = dividend_stats
             dividend_info["current_price"] = current_price
             dividend_info["pb_ratio"] = pb_ratio
             dividend_info["pe_ratio"] = None  # akshare get_stock_pe_pb_history 不返回 PE
             dividend_info["market_cap"] = None  # 同上
 
             # 总股本:已在第 3 步用 _fetch_total_shares 取过,这里复用 cur_total_shares。
-            # (保留 dividend_info["total_shares"] 字段供 LLM 算股息率。)
             dividend_info["total_shares"] = cur_total_shares
 
             # 连续分红年限：从 capital_change_events 反推
@@ -368,6 +374,10 @@ def run(
                     # skill 自己算的 payout_ratio(events 口径)覆盖 LLM 输出,
                     # 避免 LLM 估算与 trend chart 同年点不一致。
                     payout_ratio_override=dividend_info.get("payout_ratio"),
+                    # 同上:dividend_yield(per_share / current_price)由 code 算,
+                    # 避免 LLM 在缺股价时臆测(常见,因为 akshare get_stock_pe_pb_history
+                    # 网络不稳,current_price 经常 None)。
+                    dividend_yield_override=dividend_info.get("dividend_yield"),
                 )
                 md_path.write_text(md_content, encoding="utf-8")
                 markdown_path = str(md_path)

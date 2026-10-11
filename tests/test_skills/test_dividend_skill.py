@@ -1221,6 +1221,145 @@ def test_skill_payout_ratio_override_llm_value(tmp_path, monkeypatch):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# 关键指标 2:股息率(%) — code 算,覆盖 LLM 估算
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def test_extract_dividend_info_computes_yield_when_price_available():
+    """events + current_price + total_shares 三者齐全 → code 算出股息率。
+
+    公式:yield = (cash_dividend_paid / total_shares) / current_price × 100
+    即 (per_share_dividend / current_price) × 100
+
+    场景:000423 2024
+        现金分红总额 = 15.58 亿(双笔累加)
+        total_shares = 643,976,824
+        current_price = 44.95 (用总市值 289.46亿 / 6.44亿股反推)
+        per_share = 15.58e8 / 643_976_824 = 24.197 元/股
+        yield = 24.197 / 44.95 × 100 = 5.38%
+    """
+    fd = {
+        "income_statement": {"net_profit": 1_557_000_000.0},
+        "cash_flow": {
+            "net_cash_from_operations": 2_171_000_000.0,
+            "cash_for_fixed_assets": 97_000_000.0,
+            "cash_for_dividend_and_interest": 1_882_987_553.57,
+        },
+    }
+    events = [
+        {"event_type": "cash_dividend", "cash_per_10_shares": 11.4669},
+        {"event_type": "cash_dividend", "cash_per_10_shares": 12.7299},
+    ]
+    info = extract_dividend_info(
+        fd, dividend_events=events,
+        total_shares=643_976_824.0,
+        current_price=44.95,
+    )
+    # per_share = 24.1968 / 10 × 643_976_824 = 1_558_500_xxx ≈ 15.58 亿
+    # yield = 1_558_500_xxx / 643_976_824 / 44.95 × 100 ≈ 5.38
+    assert info["dividend_yield"] is not None
+    assert 5.3 < info["dividend_yield"] < 5.5, (
+        f"股息率应≈5.38%,实际 {info['dividend_yield']:.2f}%"
+    )
+
+
+def test_extract_dividend_info_yield_none_when_price_missing():
+    """current_price 缺失 → yield=None,不臆测。"""
+    fd = {
+        "income_statement": {"net_profit": 1_557_000_000.0},
+        "cash_flow": {
+            "net_cash_from_operations": 2_171_000_000.0,
+            "cash_for_dividend_and_interest": 1_882_987_553.57,
+        },
+    }
+    events = [{"event_type": "cash_dividend", "cash_per_10_shares": 24.1968}]
+    info = extract_dividend_info(
+        fd, dividend_events=events,
+        total_shares=643_976_824.0,
+        current_price=None,  # akshare 失败
+    )
+    assert info["dividend_yield"] is None, "缺股价时不应臆测股息率"
+
+
+def test_extract_dividend_info_yield_none_when_shares_missing():
+    """total_shares 缺失 → yield=None。"""
+    fd = {
+        "income_statement": {"net_profit": 1_557_000_000.0},
+        "cash_flow": {
+            "net_cash_from_operations": 2_171_000_000.0,
+            "cash_for_dividend_and_interest": 1_882_987_553.57,
+        },
+    }
+    events = [{"event_type": "cash_dividend", "cash_per_10_shares": 24.1968}]
+    info = extract_dividend_info(
+        fd, dividend_events=events,
+        total_shares=None,  # share_structure 缺失
+        current_price=44.95,
+    )
+    assert info["dividend_yield"] is None, "缺总股本时不应臆测股息率"
+
+
+def test_extract_dividend_info_yield_none_when_no_events():
+    """events 缺失且 cash_flow=0 → yield=None,无数据可算。"""
+    fd = {
+        "income_statement": {"net_profit": 1_557_000_000.0},
+        "cash_flow": {
+            "net_cash_from_operations": 2_171_000_000.0,
+            "cash_for_dividend_and_interest": 0,
+        },
+    }
+    info = extract_dividend_info(
+        fd, dividend_events=[],
+        total_shares=643_976_824.0,
+        current_price=44.95,
+    )
+    assert info["dividend_yield"] is None
+
+
+def test_build_dividend_markdown_yield_override_used():
+    """dividend_yield_override 优先于 LLM 估算的 dividend_yield。"""
+    # LLM 估 4.5,但 skill 算出来的是 5.38,应被 override
+    result = dict(_FULL_RESULT, dividend_yield=4.5)
+    md = build_dividend_markdown(
+        result,
+        chart_path="charts/dividend_trend_2024.png",
+        table=_sample_table(),
+        company_name="测试公司",
+        stock_code="999999",
+        report_year=2024,
+        dividend_yield_override=5.38,
+    )
+    # 关键指标段:dividend_yield_override 应出现,4.50 不应出现
+    assert "5.38" in md, "skill 算的 5.38% 应在 markdown 中"
+    # 4.50 仍可能在其它地方(比如其它指标的 LLM 值);但 yield 这一行应是 5.38
+    # 简化:确保 dividend_yield_override 唯一出现一次(在关键指标段)
+    # 这里只检查 yield 表里的值
+    key_section = md[md.index("## 二、关键指标"):md.index("## 三、")]
+    assert "5.38" in key_section
+    assert "4.50" not in key_section, (
+        f"关键指标段的股息率应是 override 5.38,不是 LLM 估算的 4.50"
+    )
+
+
+def test_build_dividend_markdown_yield_falls_back_to_llm_when_no_override():
+    """dividend_yield_override=None → 用 LLM 估算的 dividend_yield(向后兼容)。"""
+    result = dict(_FULL_RESULT, dividend_yield=4.5)
+    md = build_dividend_markdown(
+        result,
+        chart_path="charts/dividend_trend_2024.png",
+        table=_sample_table(),
+        company_name="X",
+        stock_code="000001",
+        report_year=2024,
+        # dividend_yield_override 不传 → None
+    )
+    key_section = md[md.index("## 二、关键指标"):md.index("## 三、")]
+    assert "4.50" in key_section, (
+        "无 override 时应回落到 LLM 估算的 4.50%(向后兼容)"
+    )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # 趋势表列顺序:分红率挪到最后一列 + markdown 加口径注释
 # ──────────────────────────────────────────────────────────────────────────────
 
