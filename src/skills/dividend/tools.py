@@ -404,6 +404,9 @@ def render_debt_structure_chart(
         import matplotlib
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
+        # 复用 visualization._apply_cjk_font() — 否则「年」「有息」等中文显示为方块
+        from src.tools.visualization import _apply_cjk_font
+        _apply_cjk_font()
     except ImportError as exc:
         logger.warning("matplotlib 未安装,跳过负债结构图: %s", exc)
         Path(output_path).write_text("", encoding="utf-8")

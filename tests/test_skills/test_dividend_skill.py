@@ -1616,6 +1616,36 @@ def test_render_debt_structure_chart_handles_empty_data(tmp_path):
     assert result_path.exists()
 
 
+def test_render_debt_structure_chart_no_cjk_font_warnings(tmp_path, recwarn):
+    """画图时不应有 CJK 字体缺失警告(Glyph '年' missing ...)。
+
+    之前版本忘了应用 visualization._apply_cjk_font() → 「年」「有息」「无息」
+    等中文字符在 PNG 里显示为方块。
+    """
+    import warnings
+
+    from src.skills.dividend.tools import render_debt_structure_chart
+
+    out = tmp_path / "no_warning.png"
+    render_debt_structure_chart(
+        {
+            "2023": {"lease_liabilities": 2.5e8, "total_liabilities": 14.0e8},
+            "2024": {"lease_liabilities": 4.0e8, "total_liabilities": 16.5e8},
+        },
+        out,
+        title="测试公司 - 负债结构(有息 vs 无息)",  # 标题含中文
+    )
+
+    cjk_warnings = [
+        w for w in recwarn.list
+        if "Glyph" in str(w.message) and "missing" in str(w.message)
+    ]
+    assert cjk_warnings == [], (
+        f"画图时不应有 CJK 字体缺失警告,但出现了 {len(cjk_warnings)} 条:\n"
+        + "\n".join(str(w.message) for w in cjk_warnings)
+    )
+
+
 def test_build_dividend_markdown_has_separate_debt_section():
     """build_dividend_markdown 在传 debt_chart_path/debt_table 时新增独立 section。
 
