@@ -1438,6 +1438,32 @@ def test_compute_debt_breakdown_handles_no_total():
     assert ni_pct == 0.0
 
 
+def test_compute_debt_breakdown_falls_back_to_current_noncurrent():
+    """total_liabilities 缺失,但 current + non_current 有 → 用 fallback 求和。
+
+    真实场景:000423 2020-2024 的 PDF 解析漏掉 total_liabilities 字段,
+    但 total_current_liabilities 有值,total_non_current_liabilities 可能为 None。
+    """
+    from src.skills.dividend.tools import compute_debt_breakdown
+
+    bs = {
+        # total_liabilities 缺失 — 触发 fallback
+        "short_term_borrowings": 0,
+        "non_current_liabilities_due_within_one_year": 4_065_000.0,
+        "lease_liabilities": 0,
+        "total_current_liabilities": 2_755_244_398.98,  # ≈27.55亿
+        "total_non_current_liabilities": None,  # 缺失
+    }
+    interest, non_interest, total, i_pct, ni_pct = compute_debt_breakdown(bs)
+    # fallback 用 total_current_liabilities + None → 27.55亿
+    assert abs(total - 2_755_244_398.98) < 1, f"total 应用 fallback,实际 {total}"
+    # 有息 ≈ 4.07M(只有一年内到期),占比 ≈ 0.15%
+    assert abs(interest - 4_065_000.0) < 1
+    assert i_pct > 0 and i_pct < 1, f"有息占比应很小,实际 {i_pct}"
+    # 无息 ≈ total - 有息 ≈ 27.55亿
+    assert abs(non_interest - (total - interest)) < 1
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # 新增关注 2:营收 / 净利 YoY 变化
 # ──────────────────────────────────────────────────────────────────────────────

@@ -202,6 +202,13 @@ def compute_debt_breakdown(
         应付票据 / 长期应付款 视企业而定(可带息可商业承兑),
         本函数暂未计入有息(保守处理);若业务需要可加。
 
+    ⚠️ total_liabilities fallback:
+        部分 PDF 解析漏掉 total_liabilities(000423 实测):
+        - 优先用 total_liabilities
+        - 缺失时用 total_current_liabilities + total_non_current_liabilities
+        - 再不行用 total_liabilities_and_owners_equity - total_owners_equity
+        - 都没有 → 0(此时 interest = 0,non_interest = 0)
+
     Args:
         bs_dict: 一行合并资产负债表的字段 dict(列名 → 数值),
                 可以是 Peewee instance.__dict__、duckdb row、或 dict。
@@ -227,7 +234,20 @@ def compute_debt_breakdown(
     interest = sum(
         float(bs_dict.get(f) or 0) for f in interest_fields
     )
+
+    # total_liabilities 多级 fallback(PDF 解析漏字段时降级)
     total = float(bs_dict.get("total_liabilities") or 0)
+    if total <= 0:
+        cur = bs_dict.get("total_current_liabilities")
+        non_cur = bs_dict.get("total_non_current_liabilities")
+        if cur is not None or non_cur is not None:
+            total = float(cur or 0) + float(non_cur or 0)
+    if total <= 0:
+        total_eq = bs_dict.get("total_liabilities_and_owners_equity")
+        equity = bs_dict.get("total_owners_equity")
+        if total_eq is not None and equity is not None:
+            total = float(total_eq) - float(equity)
+
     non_interest = max(total - interest, 0.0)
 
     if total > 0:
