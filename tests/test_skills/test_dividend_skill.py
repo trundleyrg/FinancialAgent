@@ -650,8 +650,13 @@ def test_build_dividend_extra_columns_multi_year_ordered():
     assert extras["拆股情况"] == ["无", "无", "无"]
 
 
-def test_render_dividend_trend_chart_returns_5_col_table(tmp_path):
-    """trend chart 返回的 DataFrame 有 5 列(3 数字 + 2 文字/扩展)。"""
+def test_render_dividend_trend_chart_returns_10_col_table(tmp_path):
+    """trend chart 返回的 DataFrame 有 10 列(3 数字 + 7 文字/扩展)。
+
+    列结构(新增关注面后):
+        营业收入 / 归母 / 分红总额 / 拆股 / 营收YoY / 净利YoY /
+        有息负债 / 无息负债 / 有息占比 / 分红率
+    """
     multi_year_summary = {
         "2023": {
             "operating_revenue": 5e9, "net_profit": 1e9,
@@ -672,7 +677,7 @@ def test_render_dividend_trend_chart_returns_5_col_table(tmp_path):
         }],
     }
     shares_by_year = {"2023": 1e8, "2024": 1e8}
-    out = tmp_path / "five_col.png"
+    out = tmp_path / "ten_col.png"
     chart_path, table = render_dividend_trend_chart(
         multi_year_summary, out,
         dividend_events_by_year=events_by_year,
@@ -680,17 +685,29 @@ def test_render_dividend_trend_chart_returns_5_col_table(tmp_path):
     )
     assert chart_path == out
     assert out.exists()
-    # 5 列 — 分红率(派生指标)放最后一列,阅读流:基本面 → 派息结构 → 比率
-    assert list(table.columns) == [
+    # 10 列(原 5 + 新增 5) — 分红率(派生指标)放最后一列,阅读流:基本面 → 派息结构 → 比率
+    expected_cols = [
         "营业收入(亿元)", "归母净利润(亿元)",
-        "分红总金额(亿元)", "拆股情况", "分红率(%)",
+        "分红总金额(亿元)", "拆股情况",
+        "营收YoY(%)", "净利YoY(%)",
+        "有息负债(亿元)", "无息负债(亿元)", "有息占比(%)",
+        "分红率(%)",
     ]
+    assert list(table.columns) == expected_cols, (
+        f"列序与期望不符: 实际 {list(expected_cols)}"
+    )
     # 拆股情况:2023=无(纯派现),2024=10送2转1
     assert table["拆股情况"]["2023"] == "无"
     assert table["拆股情况"]["2024"] == "10送2转1"
     # 分红总金额:2023=0.5亿,2024=0.5亿
     assert table["分红总金额(亿元)"]["2023"] == 0.5
     assert table["分红总金额(亿元)"]["2024"] == 0.5
+    # YoY(2024 vs 2023):营收 20%,净利 20%
+    assert table["营收YoY(%)"]["2024"] == 20.0
+    assert table["净利YoY(%)"]["2024"] == 20.0
+    # 没传 debt_by_year → 有息负债等 0
+    assert table["有息负债(亿元)"]["2023"] == 0.0
+    assert table["有息负债(亿元)"]["2024"] == 0.0
 
 
 def test_skill_markdown_includes_extra_table_columns(tmp_path, monkeypatch):
@@ -1360,16 +1377,213 @@ def test_build_dividend_markdown_yield_falls_back_to_llm_when_no_override():
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# 新增关注 1:有息负债 vs 无息负债 分类(高息债风险评估)
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def test_compute_debt_breakdown_basic():
+    """compute_debt_breakdown 把总负债分成有息 / 无息。
+
+    000423 2020 真实场景:
+        短期借款 = 0
+        长期借款 = 0
+        应付债券 = 0
+        一年内到期非流动负债 = 0
+        租赁负债 = ~7 亿(2019 新版起)
+        应付利息 = 0
+        → 有息 = ~7 亿
+        → 总负债 = 应付账款 + 其他应付款 + 合同负债 + ... (无息为主)
+    """
+    # 真实数据示意:总负债 15 亿,其中租赁负债 7 亿(有息),其余 8 亿(无息)
+    bs_dict = {
+        "short_term_borrowings": 0,
+        "long_term_borrowings": 0,
+        "bonds_payable": 0,
+        "non_current_liabilities_due_within_one_year": 0,
+        "lease_liabilities": 700_000_000.0,
+        "interest_payable": 0,
+        "total_liabilities": 1_500_000_000.0,
+    }
+    from src.skills.dividend.tools import compute_debt_breakdown
+
+    interest, non_interest, total, interest_pct, non_interest_pct = compute_debt_breakdown(bs_dict)
+    assert interest == 700_000_000.0
+    assert non_interest == 800_000_000.0
+    assert total == 1_500_000_000.0
+    assert abs(interest_pct - 46.67) < 0.1
+    assert abs(non_interest_pct - 53.33) < 0.1
+
+
+def test_compute_debt_breakdown_handles_missing_fields():
+    """缺字段时按 0 处理,不抛错。"""
+    from src.skills.dividend.tools import compute_debt_breakdown
+
+    bs_dict = {"total_liabilities": 100.0}  # 其他全 None
+    interest, non_interest, total, _, _ = compute_debt_breakdown(bs_dict)
+    assert interest == 0
+    assert total == 100.0
+    assert non_interest == 100.0
+
+
+def test_compute_debt_breakdown_handles_no_total():
+    """total_liabilities 缺失 → 返回 (0, 0, 0, 0.0, 0.0)。"""
+    from src.skills.dividend.tools import compute_debt_breakdown
+
+    interest, non_interest, total, i_pct, ni_pct = compute_debt_breakdown({})
+    assert interest == 0
+    assert non_interest == 0
+    assert total == 0
+    assert i_pct == 0.0
+    assert ni_pct == 0.0
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 新增关注 2:营收 / 净利 YoY 变化
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def test_compute_revenue_profit_changes_basic():
+    """compute_revenue_profit_changes 计算 YoY 增速。
+
+    input: 多年(按年份排序):
+        2020: revenue=34.09, profit=0.43
+        2021: revenue=38.49, profit=4.40
+        2022: revenue=40.42, profit=7.80
+        2023: revenue=47.15, profit=11.51
+        2024: revenue=59.21, profit=15.57
+
+    YoY:
+        revenue_yoy(2024) = (59.21 - 47.15) / 47.15 = 25.57%
+        profit_yoy(2024) = (15.57 - 11.51) / 11.51 = 35.27%
+        revenue_cagr(2020→2024) = (59.21/34.09)^(1/4) - 1 = 14.79%
+        profit_cagr = (15.57/0.43)^(1/4) - 1 ≈ 145%(低基数)
+    """
+    from src.skills.dividend.tools import compute_revenue_profit_changes
+
+    multi_year = {
+        "2020": {"operating_revenue": 34.09e8, "net_profit": 0.43e8},
+        "2021": {"operating_revenue": 38.49e8, "net_profit": 4.40e8},
+        "2022": {"operating_revenue": 40.42e8, "net_profit": 7.80e8},
+        "2023": {"operating_revenue": 47.15e8, "net_profit": 11.51e8},
+        "2024": {"operating_revenue": 59.21e8, "net_profit": 15.57e8},
+    }
+    result = compute_revenue_profit_changes(multi_year)
+
+    assert "revenue_yoy" in result
+    assert "net_profit_yoy" in result
+    assert "revenue_cagr" in result
+    assert "net_profit_cagr" in result
+
+    # 最新一年(2024)的 YoY
+    latest_rev_yoy = result["revenue_yoy"][-1]
+    latest_profit_yoy = result["net_profit_yoy"][-1]
+    assert 25 < latest_rev_yoy < 26, f"2024 营收 YoY 应≈25.6%, 实际 {latest_rev_yoy}"
+    assert 34 < latest_profit_yoy < 36, f"2024 净利 YoY 应≈35.3%, 实际 {latest_profit_yoy}"
+
+    # CAGR(2020→2024,4 年期)
+    rev_cagr = result["revenue_cagr"]
+    assert 14 < rev_cagr < 16, f"营收 CAGR 应≈14.8%, 实际 {rev_cagr}"
+
+
+def test_compute_revenue_profit_changes_empty_data():
+    """空数据 → 返回空 dict。"""
+    from src.skills.dividend.tools import compute_revenue_profit_changes
+
+    result = compute_revenue_profit_changes({})
+    assert result["revenue_yoy"] == []
+    assert result["net_profit_yoy"] == []
+    assert result["revenue_cagr"] == 0.0
+    assert result["net_profit_cagr"] == 0.0
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 新增关注 3:multi_year_summary 扩列(debt + YoY)
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def test_build_dividend_extra_columns_includes_debt_and_yoy():
+    """_build_dividend_extra_columns 现在追加:YoY + 有息/无息负债 + 有息占比。
+
+    columns 期望顺序:
+        营业收入(亿元), 归母净利润(亿元),
+        营收YoY(%), 净利YoY(%), 营收CAGR(%), 净利CAGR(%),
+        分红总金额(亿元), 拆股情况,
+        有息负债(亿元), 无息负债(亿元), 有息占比(%)
+    """
+    import pandas as pd
+    from src.skills.dividend.tools import _build_dividend_extra_columns
+
+    multi_year_summary = {
+        "2020": {"operating_revenue": 34.09e8, "net_profit": 0.43e8},
+        "2021": {"operating_revenue": 38.49e8, "net_profit": 4.40e8},
+        "2024": {"operating_revenue": 59.21e8, "net_profit": 15.57e8},
+    }
+    events_by_year = {
+        "2024": [{"event_type": "cash_dividend", "cash_per_10_shares": 24.1968}],
+    }
+    debt_by_year = {
+        "2020": {"interest_bearing": 0, "non_interest_bearing": 1.5e9, "total_liabilities": 1.5e9},
+        "2021": {"interest_bearing": 0, "non_interest_bearing": 1.6e9, "total_liabilities": 1.6e9},
+        "2024": {"interest_bearing": 7e8, "non_interest_bearing": 8e8, "total_liabilities": 1.5e9},
+    }
+    shares_by_year = {"2024": 643_976_824.0}
+
+    extras = _build_dividend_extra_columns(
+        multi_year_summary, events_by_year, shares_by_year,
+        debt_by_year=debt_by_year,
+    )
+    # 验证新 keys 存在
+    assert "营收YoY(%)" in extras
+    assert "净利YoY(%)" in extras
+    assert "有息负债(亿元)" in extras
+    assert "无息负债(亿元)" in extras
+    assert "有息占比(%)" in extras
+    # 保持向后兼容
+    assert "分红总金额(亿元)" in extras
+    assert "拆股情况" in extras
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 新增关注 4:markdown 二、关键指标 加有息负债占比
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def test_build_dividend_markdown_interest_debt_ratio_in_section():
+    """build_dividend_markdown 应在「二、关键指标」加有息负债占比行。"""
+    result = dict(
+        _FULL_RESULT,
+        interest_debt_ratio = 46.67,  # code 算
+        total_interest_bearing_debt = 7.0,  # 亿
+        total_non_interest_bearing_debt = 8.0,  # 亿
+    )
+    md = build_dividend_markdown(
+        result,
+        chart_path="charts/dividend_trend_2024.png",
+        table=_sample_table(),
+        company_name="东阿阿胶",
+        stock_code="000423",
+        report_year=2024,
+        interest_debt_ratio_override=46.67,
+    )
+    key_section = md[md.index("## 二、关键指标"):md.index("## 三、")]
+    assert "有息负债" in key_section or "Interest" in key_section, (
+        "关键指标段应包含有息负债信息"
+    )
+    assert "46.67" in key_section, "有息负债占比应在 markdown 中"
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # 趋势表列顺序:分红率挪到最后一列 + markdown 加口径注释
 # ──────────────────────────────────────────────────────────────────────────────
 
 
 def test_render_dividend_trend_chart_payout_ratio_column_is_last(tmp_path):
-    """分红率(%) 应是趋势表的最后一列 — 派生指标放末尾,事实指标(营收/净利/派息/拆股)放前面。
+    """分红率(%) 应是趋势表的最后一列 — 派生指标放末尾,事实指标放前面。
 
-    当前 bug:列顺序 = [营业收入, 归母净利润, 分红率, 分红总金额, 拆股情况],
-    派生指标(分红率)在中间,违反"先看基本面→再看派息结构→最后看比率"的阅读流。
-    期望顺序:[营业收入, 归母净利润, 分红总金额, 拆股情况, 分红率]。
+    期望顺序:
+        [营业收入, 归母, 分红总金额, 拆股情况,
+          营收YoY, 净利YoY, 有息负债, 无息负债, 有息占比,
+          分红率(派生)] = 共 10 列
     """
     multi_year_summary = {
         "2023": {"operating_revenue": 5e9, "net_profit": 1e9,
@@ -1382,7 +1596,10 @@ def test_render_dividend_trend_chart_payout_ratio_column_is_last(tmp_path):
 
     expected_order = [
         "营业收入(亿元)", "归母净利润(亿元)",
-        "分红总金额(亿元)", "拆股情况", "分红率(%)",
+        "分红总金额(亿元)", "拆股情况",
+        "营收YoY(%)", "净利YoY(%)",
+        "有息负债(亿元)", "无息负债(亿元)", "有息占比(%)",
+        "分红率(%)",
     ]
     assert list(table.columns) == expected_order, (
         f"列顺序应={expected_order},实际={list(table.columns)}; "

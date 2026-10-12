@@ -14,6 +14,7 @@ from src.skills._loader import read_skill_description
 from src.skills.dividend.tools import (
     build_dividend_markdown,
     compute_dividend_stability_years,
+    compute_debt_breakdown,
     extract_dividend_info,
     fetch_total_shares_by_year,
     filter_financial_data,
@@ -171,6 +172,29 @@ def run(
         except Exception as exc:
             logger.warning("多年财务数据拉取失败 (%s): %s", company_name, exc)
 
+        # 1b. 多年负债结构(有息 vs 无息) — 趋势表 + 二、关键指标用
+        debt_by_year: Dict[str, Dict[str, Any]] = {}
+        latest_interest_ratio: float | None = None
+        latest_interest_debt: float | None = None
+        try:
+            for y, stmts in multi_year_raw.items():
+                bs = stmts.get("consolidated_balance_sheet") or {}
+                debt_by_year[y] = bs  # compute_debt_breakdown 直接吃这字段
+            # 最新年份的指标(供 skill 写入 dividend_info)
+            if multi_year_summary:
+                latest_year = max(multi_year_summary.keys())
+                i, ni, _t, i_pct, _ni_pct = compute_debt_breakdown(
+                    debt_by_year.get(latest_year) or {}
+                )
+                latest_interest_ratio = i_pct
+                latest_interest_debt = round(i / 1e8, 2)  # 亿元
+                logger.info(
+                    "最新负债结构 (%s): 有息=%.2f 亿, 占比=%.2f%%",
+                    latest_year, latest_interest_debt, latest_interest_ratio,
+                )
+        except Exception as exc:
+            logger.warning("多年负债结构计算失败: %s", exc)
+
         # 2. 计算分析指标
         profitability = calculate_profitability(income_statement, balance_sheet)
         liquidity = calculate_liquidity(balance_sheet)
@@ -230,6 +254,12 @@ def run(
                 stock_code, report_year, report_period or "FY",
             )
             dividend_info["dividend_stability_years"] = stability_years
+
+        # 把新指标(有息负债占比 / 有息负债额)塞进 dividend_info 供 LLM 提示
+        if latest_interest_ratio is not None:
+            dividend_info["interest_debt_ratio"] = latest_interest_ratio
+        if latest_interest_debt is not None:
+            dividend_info["interest_bearing_debt"] = latest_interest_debt
 
         analysis_metrics = {
             "profitability": profitability,
@@ -336,6 +366,7 @@ def run(
                     },
                     dividend_events_by_year=events_by_year or None,
                     total_shares_by_year=shares_by_year or None,
+                    debt_by_year=debt_by_year or None,
                 )
                 trend_table.to_csv(csv_path, index_label="年份")
                 chart_path = str(png_path)
@@ -378,6 +409,9 @@ def run(
                     # 避免 LLM 在缺股价时臆测(常见,因为 akshare get_stock_pe_pb_history
                     # 网络不稳,current_price 经常 None)。
                     dividend_yield_override=dividend_info.get("dividend_yield"),
+                    # 有息负债占比(多年负债结构,code 算) — 趋势表 + 关键指标二用
+                    interest_debt_ratio_override=latest_interest_ratio,
+                    interest_bearing_debt_override=latest_interest_debt,
                 )
                 md_path.write_text(md_content, encoding="utf-8")
                 markdown_path = str(md_path)

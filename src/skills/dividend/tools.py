@@ -184,14 +184,154 @@ def _fmt_split_qty(qty: float) -> str:
     return f"{qty:.1f}"
 
 
+def compute_debt_breakdown(
+    bs_dict: dict[str, Any],
+) -> tuple[float, float, float, float, float]:
+    """把合并资产负债表的负债拆成「有息」+「无息」两类。
+
+    有息负债(Interest-bearing debt)严格定义口径:
+        - 短期借款 / 向央行借款 / 拆入资金(金融企业)
+        - 应付债券 / 优先股(债券下) / 永续债(债券下)
+        - 长期借款
+        - 一年内到期的非流动负债(通常是长期借款/债券转入流动的部分)
+        - 租赁负债(2019 版新增,有息)
+        - 应付利息(已计提未付)
+
+    简化分类 — 字段缺失时按 0 处理,不抛错。
+        应付票据 / 长期应付款 视企业而定(可带息可商业承兑),
+        本函数暂未计入有息(保守处理);若业务需要可加。
+
+    Args:
+        bs_dict: 一行合并资产负债表的字段 dict(列名 → 数值),
+                可以是 Peewee instance.__dict__、duckdb row、或 dict。
+
+    Returns:
+        (interest_bearing, non_interest_bearing, total_liabilities,
+         interest_pct, non_interest_pct) — 金额单位「元」,
+         百分比为 0–100 的浮点。
+    """
+    interest_fields = (
+        "short_term_borrowings",
+        "borrowings_from_central_bank",
+        "funds_borrowed",
+        "trading_financial_liabilities",
+        "non_current_liabilities_due_within_one_year",
+        "long_term_borrowings",
+        "bonds_payable",
+        "preferred_stock_bonds",
+        "perpetual_bonds",
+        "lease_liabilities",
+        "interest_payable",
+    )
+    interest = sum(
+        float(bs_dict.get(f) or 0) for f in interest_fields
+    )
+    total = float(bs_dict.get("total_liabilities") or 0)
+    non_interest = max(total - interest, 0.0)
+
+    if total > 0:
+        interest_pct = round(interest / total * 100, 2)
+        non_interest_pct = round(non_interest / total * 100, 2)
+    else:
+        interest_pct = 0.0
+        non_interest_pct = 0.0
+
+    return interest, non_interest, total, interest_pct, non_interest_pct
+
+
+def compute_revenue_profit_changes(
+    multi_year_summary: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """按年份排序算营收 / 归母净利润的 YoY 增速 + CAGR(首年→末年)。
+
+    Args:
+        multi_year_summary: {year_str: {"operating_revenue": float,
+                              "net_profit": float}}
+
+    Returns:
+        {
+            "years": [year_str, ...]    # 排序后年份
+            "revenue_yoy": [pct, ...]    # 同 years 顺序,首年 = None/0
+            "net_profit_yoy": [pct, ...] # 同上
+            "revenue_cagr": float        # 首年→末年 CAGR,数据不足返 0
+            "net_profit_cagr": float     # 同上(低基数股票需谨慎解读)
+        }
+    """
+    years = sorted(multi_year_summary.keys())
+    revenue_yoy: list[float] = []
+    profit_yoy: list[float] = []
+
+    for i, y in enumerate(years):
+        m = multi_year_summary.get(y) or {}
+        rev = m.get("operating_revenue")
+        prof = m.get("net_profit")
+        if i == 0 or rev is None or rev <= 0:
+            revenue_yoy.append(0.0)
+        else:
+            prev_rev = (multi_year_summary.get(years[i - 1]) or {}).get(
+                "operating_revenue"
+            )
+            if prev_rev and prev_rev > 0:
+                revenue_yoy.append(round((rev - prev_rev) / prev_rev * 100, 2))
+            else:
+                revenue_yoy.append(0.0)
+
+        if i == 0 or prof is None or prof <= 0:
+            profit_yoy.append(0.0)
+        else:
+            prev_prof = (multi_year_summary.get(years[i - 1]) or {}).get(
+                "net_profit"
+            )
+            if prev_prof and prev_prof > 0:
+                profit_yoy.append(round((prof - prev_prof) / prev_prof * 100, 2))
+            else:
+                profit_yoy.append(0.0)
+
+    # CAGR:首年→末年(年数 = len-1)
+    def _cagr(first, last, n_years):
+        if first is None or last is None or first <= 0 or last <= 0 or n_years <= 0:
+            return 0.0
+        return round(((last / first) ** (1 / n_years) - 1) * 100, 2)
+
+    n = len(years) - 1
+    rev_cagr = 0.0
+    profit_cagr = 0.0
+    if n > 0:
+        first_rev = (multi_year_summary.get(years[0]) or {}).get("operating_revenue")
+        last_rev = (multi_year_summary.get(years[-1]) or {}).get("operating_revenue")
+        rev_cagr = _cagr(first_rev, last_rev, n)
+
+        first_profit = (multi_year_summary.get(years[0]) or {}).get("net_profit")
+        last_profit = (multi_year_summary.get(years[-1]) or {}).get("net_profit")
+        profit_cagr = _cagr(first_profit, last_profit, n)
+
+    return {
+        "years": years,
+        "revenue_yoy": revenue_yoy,
+        "net_profit_yoy": profit_yoy,
+        "revenue_cagr": rev_cagr,
+        "net_profit_cagr": profit_cagr,
+    }
+
+
 def _build_dividend_extra_columns(
     multi_year_summary: dict[str, dict[str, Any]],
     events_by_year: dict[str, list[dict[str, Any]]] | None,
     total_shares_by_year: dict[str, float] | None,
+    debt_by_year: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, list[Any]]:
-    """给趋势表追加 2 列(不影响 3 列 chart series):
+    """给趋势表追加列(不影响 3 列 chart series):
+
+    原有 2 列:
     - 分红总金额(亿元):events 路径优先,退到 cash_for_dividend_and_interest 字段
     - 拆股情况:"10送X转Y" / "10送X" / "10转Y" / "无"
+
+    新增 5 列(YoY + 负债结构):
+    - 营收YoY(%):当年营收 ÷ 上年 - 1(首年=0)
+    - 净利YoY(%):当年归母净利 ÷ 上年 - 1
+    - 有息负债(亿元):short/long-term borrowings + bonds + lease + 一年内到期 + 应付利息
+    - 无息负债(亿元):total_liabilities - 有息
+    - 有息占比(%):有息 / total_liabilities × 100
 
     返回的 list 顺序与 ``sorted(multi_year_summary.keys())`` 对齐,直接
     喂给 ``pd.DataFrame[列名] = ...`` 即可扩展表格。
@@ -199,6 +339,17 @@ def _build_dividend_extra_columns(
     years = sorted(multi_year_summary.keys())
     amounts: list[float] = []
     splits: list[str] = []
+    revenue_yoy: list[float] = []
+    profit_yoy: list[float] = []
+    interest_debts: list[float] = []
+    non_interest_debts: list[float] = []
+    interest_pcts: list[float] = []
+
+    # 先算 YoY(只依赖 multi_year_summary)
+    changes = compute_revenue_profit_changes(multi_year_summary)
+    revenue_yoy = changes["revenue_yoy"]
+    profit_yoy = changes["net_profit_yoy"]
+
     for y in years:
         events = (events_by_year or {}).get(str(y), [])
         shares = (total_shares_by_year or {}).get(str(y))
@@ -228,9 +379,24 @@ def _build_dividend_extra_columns(
         else:
             splits.append("无")
 
+        # 负债结构:有息 vs 无息
+        debt = (debt_by_year or {}).get(str(y)) or {}
+        if debt:
+            i, ni, _total, i_pct, _ = compute_debt_breakdown(debt)
+        else:
+            i, ni, _total, i_pct = 0.0, 0.0, 0.0, 0.0
+        interest_debts.append(round(i / 1e8, 2))  # 元 → 亿元
+        non_interest_debts.append(round(ni / 1e8, 2))
+        interest_pcts.append(i_pct)
+
     return {
         "分红总金额(亿元)": amounts,
         "拆股情况": splits,
+        "营收YoY(%)": revenue_yoy,
+        "净利YoY(%)": profit_yoy,
+        "有息负债(亿元)": interest_debts,
+        "无息负债(亿元)": non_interest_debts,
+        "有息占比(%)": interest_pcts,
     }
 
 
@@ -487,6 +653,7 @@ def render_dividend_trend_chart(
     *,
     dividend_events_by_year: dict[str, list[dict[str, Any]]] | None = None,
     total_shares_by_year: dict[str, float] | None = None,
+    debt_by_year: dict[str, dict[str, Any]] | None = None,
 ) -> tuple[Path, pd.DataFrame]:
     """把 dividend skill 的 multi_year_summary 渲染成 3 子图趋势 + 表格。
 
@@ -557,9 +724,11 @@ def render_dividend_trend_chart(
         metric_explanations=metric_explanations,
     )
 
-    # 追加 2 列到 table:分红总金额 + 拆股情况(只展示,不进 chart)
+    # 追加 7 列到 table(只展示,不进 chart):
+    # 分红总金额 / 拆股情况 / 营收YoY / 净利YoY / 有息负债 / 无息负债 / 有息占比
     extras = _build_dividend_extra_columns(
         multi_year_summary, dividend_events_by_year, total_shares_by_year,
+        debt_by_year=debt_by_year,
     )
     for col_name, col_data in extras.items():
         table[col_name] = col_data
@@ -676,6 +845,8 @@ def build_dividend_markdown(
     report_period: Optional[str] = None,
     payout_ratio_override: Optional[float] = None,
     dividend_yield_override: Optional[float] = None,
+    interest_debt_ratio_override: Optional[float] = None,
+    interest_bearing_debt_override: Optional[float] = None,
 ) -> str:
     """把 dividend skill 的 LLM 结果 + 趋势图 + 趋势表渲染成自包含 markdown 报告。
 
@@ -758,11 +929,23 @@ def build_dividend_markdown(
         if dividend_yield_override is not None
         else result.get("dividend_yield")
     )
+    interest_debt_ratio_value = (
+        interest_debt_ratio_override
+        if interest_debt_ratio_override is not None
+        else result.get("interest_debt_ratio")
+    )
+    interest_bearing_value = (
+        interest_bearing_debt_override
+        if interest_bearing_debt_override is not None
+        else result.get("interest_bearing_debt")
+    )
     key_rows = [
         ("股息率(%)", yield_value),
         ("分红率(%)", payout_value),
         ("连续分红年限(年)", result.get("dividend_stability_years")),
         ("自由现金流对分红覆盖率(倍)", result.get("cash_flow_coverage")),
+        ("有息负债(亿元)", interest_bearing_value),
+        ("有息负债占比(%)", interest_debt_ratio_value),
         ("财务健康度评分(0-100)", result.get("financial_health_score")),
     ]
     key_lines = ["## 二、关键指标", ""]
