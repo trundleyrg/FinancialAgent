@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -318,20 +319,19 @@ def _build_dividend_extra_columns(
     multi_year_summary: dict[str, dict[str, Any]],
     events_by_year: dict[str, list[dict[str, Any]]] | None,
     total_shares_by_year: dict[str, float] | None,
-    debt_by_year: dict[str, dict[str, Any]] | None = None,
+    debt_by_year: dict[str, dict[str, Any]] | None = None,  # noqa: ARG001 保留参数向后兼容
 ) -> dict[str, list[Any]]:
     """给趋势表追加列(不影响 3 列 chart series):
 
-    原有 2 列:
+    4 列:
     - 分红总金额(亿元):events 路径优先,退到 cash_for_dividend_and_interest 字段
     - 拆股情况:"10送X转Y" / "10送X" / "10转Y" / "无"
-
-    新增 5 列(YoY + 负债结构):
     - 营收YoY(%):当年营收 ÷ 上年 - 1(首年=0)
     - 净利YoY(%):当年归母净利 ÷ 上年 - 1
-    - 有息负债(亿元):short/long-term borrowings + bonds + lease + 一年内到期 + 应付利息
-    - 无息负债(亿元):total_liabilities - 有息
-    - 有息占比(%):有息 / total_liabilities × 100
+
+    注:**有息/无息负债数据不在此表展示**,改由独立的
+    ``render_debt_structure_chart`` + 单独 dataframe 在 markdown
+    二、负债结构(有息 vs 无息)section 展示,与分红率表格分离。
 
     返回的 list 顺序与 ``sorted(multi_year_summary.keys())`` 对齐,直接
     喂给 ``pd.DataFrame[列名] = ...`` 即可扩展表格。
@@ -341,9 +341,6 @@ def _build_dividend_extra_columns(
     splits: list[str] = []
     revenue_yoy: list[float] = []
     profit_yoy: list[float] = []
-    interest_debts: list[float] = []
-    non_interest_debts: list[float] = []
-    interest_pcts: list[float] = []
 
     # 先算 YoY(只依赖 multi_year_summary)
     changes = compute_revenue_profit_changes(multi_year_summary)
@@ -379,25 +376,94 @@ def _build_dividend_extra_columns(
         else:
             splits.append("无")
 
-        # 负债结构:有息 vs 无息
-        debt = (debt_by_year or {}).get(str(y)) or {}
-        if debt:
-            i, ni, _total, i_pct, _ = compute_debt_breakdown(debt)
-        else:
-            i, ni, _total, i_pct = 0.0, 0.0, 0.0, 0.0
-        interest_debts.append(round(i / 1e8, 2))  # 元 → 亿元
-        non_interest_debts.append(round(ni / 1e8, 2))
-        interest_pcts.append(i_pct)
-
     return {
         "分红总金额(亿元)": amounts,
         "拆股情况": splits,
         "营收YoY(%)": revenue_yoy,
         "净利YoY(%)": profit_yoy,
-        "有息负债(亿元)": interest_debts,
-        "无息负债(亿元)": non_interest_debts,
-        "有息占比(%)": interest_pcts,
     }
+
+
+def render_debt_structure_chart(
+    debt_by_year: dict[str, dict[str, Any]],
+    output_path: str | Path,
+    title: str | None = None,
+) -> Path:
+    """画负债结构堆叠柱图(有息 + 无息)+ 写盘 + 返路径。
+
+    每根柱代表一个年份,分两段堆叠:
+        - 底部:有息负债(Interest-bearing debt,红色/警示色)
+        - 顶部:无息负债(Non-interest-bearing debt,绿色/中性色)
+
+    当某年 `total_liabilities` 缺失 / 0 时,该年跳过(图留白 + 表里给 NaN)。
+
+    Returns:
+        output_path(Path)。失败仅 log warning,不影响 skill 整体。
+    """
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except ImportError as exc:
+        logger.warning("matplotlib 未安装,跳过负债结构图: %s", exc)
+        Path(output_path).write_text("", encoding="utf-8")
+        return Path(output_path)
+
+    years = sorted(debt_by_year.keys())
+    if not years:
+        # 无数据:生成一张提示图
+        fig, ax = plt.subplots(figsize=(8, 4))
+        ax.text(0.5, 0.5, "(暂无资产负债表数据)", ha="center", va="center",
+                fontsize=14, transform=ax.transAxes)
+        ax.set_axis_off()
+        fig.tight_layout()
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(output_path, dpi=120, bbox_inches="tight")
+        plt.close(fig)
+        return Path(output_path)
+
+    interest_vals = []
+    non_interest_vals = []
+    plot_years = []
+    for y in years:
+        bs = debt_by_year.get(y) or {}
+        i, ni, total, _i_pct, _ = compute_debt_breakdown(bs)
+        if total <= 0:
+            continue
+        plot_years.append(y)
+        interest_vals.append(i / 1e8)  # 元 → 亿
+        non_interest_vals.append(ni / 1e8)
+
+    fig, ax = plt.subplots(figsize=(max(8, len(plot_years) * 1.2), 5))
+    x_pos = list(range(len(plot_years)))
+
+    # 堆叠柱图:有息(底)+ 无息(顶)
+    ax.bar(x_pos, interest_vals, color="#d62728", label="有息负债")
+    ax.bar(x_pos, non_interest_vals, bottom=interest_vals,
+           color="#2ca02c", label="无息负债")
+
+    # 顶部标总负债
+    for i, (iv, niv) in enumerate(zip(interest_vals, non_interest_vals)):
+        total_y = iv + niv
+        if max(interest_vals + non_interest_vals) > 0:
+            ax.text(
+                i, total_y + max(interest_vals + non_interest_vals) * 0.02,
+                f"{total_y:.1f}", ha="center", fontsize=9,
+            )
+
+    ax.set_xticks(x_pos)
+    ax.set_xticklabels(plot_years, rotation=30 if len(plot_years) > 6 else 0)
+    ax.set_xlabel("年份")
+    ax.set_ylabel("负债金额(亿元)")
+    ax.set_title(title if title else "负债结构(有息 vs 无息)")
+    ax.legend(loc="upper left")
+    ax.grid(axis="y", linestyle="--", alpha=0.3)
+
+    fig.tight_layout()
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=120, bbox_inches="tight")
+    plt.close(fig)
+    return Path(output_path)
 
 
 def query_dividend_events(
@@ -847,6 +913,8 @@ def build_dividend_markdown(
     dividend_yield_override: Optional[float] = None,
     interest_debt_ratio_override: Optional[float] = None,
     interest_bearing_debt_override: Optional[float] = None,
+    debt_chart_path: Optional[str] = None,
+    debt_table: Optional[pd.DataFrame] = None,
 ) -> str:
     """把 dividend skill 的 LLM 结果 + 趋势图 + 趋势表渲染成自包含 markdown 报告。
 
@@ -1004,7 +1072,55 @@ def build_dividend_markdown(
         "",
     ]
 
+    # 负债结构独立 section(图 + 表),与分红率表格分开展示
+    # 若提供 debt_chart_path/debt_table 才会出现,否则不显示该 section
+    debt_lines: list[str] = []
+    if debt_chart_path or (debt_table is not None and not debt_table.empty):
+        debt_lines = ["## 二、负债结构(有息 vs 无息)", ""]
+        if debt_chart_path:
+            alt = f"{company_name or '公司'} 负债结构"
+            debt_lines.append(f"![{alt}]({debt_chart_path})")
+            debt_lines.append("")
+        if debt_table is not None and not debt_table.empty:
+            debt_lines.append(_df_to_markdown_table(debt_table))
+            debt_lines.append("")
+            debt_lines.append(
+                "> **口径说明**:有息负债 = 短期借款 + 长期借款 + 应付债券 + "
+                "一年内到期的非流动负债 + 租赁负债 + 应付利息。"
+                "无息负债 = total_liabilities − 有息(以经营性应付为主)。"
+            )
+            debt_lines.append("")
+        debt_lines += ["---", ""]
+        # 负债结构占用「二」位置,后续 section 二-七 编号 → 三-八
+        # 替换下游 section 的中文数字
+        key_lines = _renumber_section(key_lines, offset=1)
+        sub_lines = _renumber_section(sub_lines, offset=1)
+        risk_lines = _renumber_section(risk_lines, offset=1)
+        rating_lines = _renumber_section(rating_lines, offset=1)
+
     return "\n".join(
-        header_lines + trend_lines + key_lines + sub_lines +
+        header_lines + trend_lines + debt_lines + key_lines + sub_lines +
         risk_lines + rating_lines,
     )
+
+
+def _renumber_section(lines: list[str], offset: int) -> list[str]:
+    """把 list 里的 `## X、` 标题中的中文数字 X 加上 offset。
+
+    例:[ "## 二、关键指标", "## 三、盈利能力" ] + offset=1
+        → [ "## 三、关键指标", "## 四、盈利能力" ]
+    """
+    if offset == 0:
+        return lines
+    chinese_nums = "一二三四五六七八九十"
+    out: list[str] = []
+    for line in lines:
+        m = re.match(r"^## ([一二三四五六七八九十])、(.*)$", line)
+        if m:
+            ch, rest = m.group(1), m.group(2)
+            idx = chinese_nums.index(ch)
+            new_idx = idx + offset
+            if 0 <= new_idx < len(chinese_nums):
+                line = f"## {chinese_nums[new_idx]}、{rest}"
+        out.append(line)
+    return out

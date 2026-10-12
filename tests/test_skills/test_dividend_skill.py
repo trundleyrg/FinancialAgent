@@ -650,12 +650,13 @@ def test_build_dividend_extra_columns_multi_year_ordered():
     assert extras["拆股情况"] == ["无", "无", "无"]
 
 
-def test_render_dividend_trend_chart_returns_10_col_table(tmp_path):
-    """trend chart 返回的 DataFrame 有 10 列(3 数字 + 7 文字/扩展)。
+def test_render_dividend_trend_chart_returns_8_col_table(tmp_path):
+    """trend chart 返回的 DataFrame 有 8 列。
 
-    列结构(新增关注面后):
-        营业收入 / 归母 / 分红总额 / 拆股 / 营收YoY / 净利YoY /
-        有息负债 / 无息负债 / 有息占比 / 分红率
+    列结构(分红率表格只放分红相关 + 营收/净利变化,负债数据另起独立 section):
+        营业收入 / 归母 / 分红总额 / 拆股 / 营收YoY / 净利YoY / 分红率
+    注:**有息/无息负债** 不在本表,改由 render_debt_structure_chart +
+    build_dividend_markdown(debt_chart_path=...) 独立展示。
     """
     multi_year_summary = {
         "2023": {
@@ -677,7 +678,7 @@ def test_render_dividend_trend_chart_returns_10_col_table(tmp_path):
         }],
     }
     shares_by_year = {"2023": 1e8, "2024": 1e8}
-    out = tmp_path / "ten_col.png"
+    out = tmp_path / "eight_col.png"
     chart_path, table = render_dividend_trend_chart(
         multi_year_summary, out,
         dividend_events_by_year=events_by_year,
@@ -685,12 +686,12 @@ def test_render_dividend_trend_chart_returns_10_col_table(tmp_path):
     )
     assert chart_path == out
     assert out.exists()
-    # 10 列(原 5 + 新增 5) — 分红率(派生指标)放最后一列,阅读流:基本面 → 派息结构 → 比率
+    # 7 列 — 分红率(派生指标)放最后一列,阅读流:基本面 → 派息结构 → 变化 → 比率
+    # 注:有息/无息负债数据另起「二、负债结构」section 展示,不混排
     expected_cols = [
         "营业收入(亿元)", "归母净利润(亿元)",
         "分红总金额(亿元)", "拆股情况",
         "营收YoY(%)", "净利YoY(%)",
-        "有息负债(亿元)", "无息负债(亿元)", "有息占比(%)",
         "分红率(%)",
     ]
     assert list(table.columns) == expected_cols, (
@@ -705,9 +706,9 @@ def test_render_dividend_trend_chart_returns_10_col_table(tmp_path):
     # YoY(2024 vs 2023):营收 20%,净利 20%
     assert table["营收YoY(%)"]["2024"] == 20.0
     assert table["净利YoY(%)"]["2024"] == 20.0
-    # 没传 debt_by_year → 有息负债等 0
-    assert table["有息负债(亿元)"]["2023"] == 0.0
-    assert table["有息负债(亿元)"]["2024"] == 0.0
+    # 不再有「有息负债」列(改独立 section 展示)
+    assert "有息负债(亿元)" not in table.columns
+    assert "有息占比(%)" not in table.columns
 
 
 def test_skill_markdown_includes_extra_table_columns(tmp_path, monkeypatch):
@@ -1535,9 +1536,10 @@ def test_build_dividend_extra_columns_includes_debt_and_yoy():
     # 验证新 keys 存在
     assert "营收YoY(%)" in extras
     assert "净利YoY(%)" in extras
-    assert "有息负债(亿元)" in extras
-    assert "无息负债(亿元)" in extras
-    assert "有息占比(%)" in extras
+    # 注:有息/无息负债数据不在 trend table,改由 render_debt_structure_chart 独立展示
+    assert "有息负债(亿元)" not in extras
+    assert "无息负债(亿元)" not in extras
+    assert "有息占比(%)" not in extras
     # 保持向后兼容
     assert "分红总金额(亿元)" in extras
     assert "拆股情况" in extras
@@ -1573,6 +1575,113 @@ def test_build_dividend_markdown_interest_debt_ratio_in_section():
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# 负债结构独立 section(图 + 表),与分红率表格不混排
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def test_render_debt_structure_chart_creates_stacked_bar(tmp_path):
+    """render_debt_structure_chart 输出堆叠柱图 PNG(有息 + 无息)。"""
+    from src.skills.dividend.tools import render_debt_structure_chart
+
+    debt_by_year = {
+        "2020": {"short_term_borrowings": 0, "long_term_borrowings": 0,
+                    "lease_liabilities": 0, "total_liabilities": 9.4e8},
+        "2021": {"short_term_borrowings": 0, "long_term_borrowings": 0,
+                    "lease_liabilities": 0, "total_liabilities": 12.0e8},
+        "2022": {"short_term_borrowings": 0, "long_term_borrowings": 0,
+                    "lease_liabilities": 0, "total_liabilities": 12.5e8},
+        "2023": {"short_term_borrowings": 0, "long_term_borrowings": 0,
+                    "lease_liabilities": 2.5e8, "total_liabilities": 14.0e8},
+        "2024": {"short_term_borrowings": 0, "long_term_borrowings": 0,
+                    "lease_liabilities": 4.0e8, "total_liabilities": 16.5e8},
+    }
+    out = tmp_path / "debt_structure.png"
+    result_path = render_debt_structure_chart(
+        debt_by_year, out,
+        title="测试公司 - 负债结构(有息 vs 无息)",
+    )
+    assert result_path == out
+    assert out.exists(), "PNG 文件应被生成"
+    assert out.stat().st_size > 1000, "PNG 文件应非空"
+
+
+def test_render_debt_structure_chart_handles_empty_data(tmp_path):
+    """空数据 → 不抛错,生成空图。"""
+    from src.skills.dividend.tools import render_debt_structure_chart
+
+    out = tmp_path / "empty.png"
+    # 不抛错
+    result_path = render_debt_structure_chart({}, out)
+    assert result_path == out
+    assert result_path.exists()
+
+
+def test_build_dividend_markdown_has_separate_debt_section():
+    """build_dividend_markdown 在传 debt_chart_path/debt_table 时新增独立 section。
+
+    关键:负债结构 section 不与分红率趋势表混排 —— 应有独立的 ## 段标题。
+    """
+    debt_table = pd.DataFrame({
+        "年份": ["2020", "2021", "2022", "2023", "2024"],
+        "有息负债(亿元)": [0.0, 0.0, 0.0, 2.5, 4.0],
+        "无息负债(亿元)": [9.4, 12.0, 12.5, 11.5, 12.5],
+        "总负债(亿元)": [9.4, 12.0, 12.5, 14.0, 16.5],
+        "有息占比(%)": [0.0, 0.0, 0.0, 17.86, 24.24],
+    }, index=["2020", "2021", "2022", "2023", "2024"])
+
+    md = build_dividend_markdown(
+        _FULL_RESULT,
+        chart_path="charts/dividend_trend_2024.png",
+        table=_sample_table(),
+        company_name="东阿阿胶",
+        stock_code="000423",
+        report_year=2024,
+        debt_chart_path="charts/debt_structure_2024.png",
+        debt_table=debt_table,
+    )
+
+    # 1. 独立 section 标题
+    assert "## " in md and "负债结构" in md, (
+        "应有独立的「负债结构」section 标题"
+    )
+
+    # 2. 负债结构 section 在「关键指标趋势」之后、「关键指标」之前或之后
+    debt_pos = md.index("负债结构")
+    trend_pos = md.index("关键指标趋势")
+    # 负债结构不应该是「关键指标趋势」同一 section(同一句话)
+    assert "关键指标趋势" not in md[debt_pos-30:debt_pos+30], (
+        "负债结构不应混入「关键指标趋势」section"
+    )
+
+    # 3. 包含独立的图与表(独立路径引用)
+    assert "debt_structure_2024.png" in md, (
+        "应有独立的负债结构图(chart_path)"
+    )
+
+    # 4. 表格内容
+    assert "有息负债" in md
+    assert "无息负债" in md
+    assert "有息占比" in md
+    assert "2024" in md  # 表格里有年份数据
+
+
+def test_build_dividend_markdown_no_debt_section_when_no_data():
+    """不传 debt_chart_path/debt_table → 不应有负债结构 section。"""
+    md = build_dividend_markdown(
+        _FULL_RESULT,
+        chart_path="charts/dividend_trend_2024.png",
+        table=_sample_table(),
+        company_name="X",
+        stock_code="000001",
+        report_year=2024,
+    )
+    # 无负债数据 → 不应有独立「负债结构」section 标题
+    assert "## " in md and "负债结构" not in md, (
+        "不传 debt 数据时不应有负债结构 section"
+    )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # 趋势表列顺序:分红率挪到最后一列 + markdown 加口径注释
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -1598,7 +1707,6 @@ def test_render_dividend_trend_chart_payout_ratio_column_is_last(tmp_path):
         "营业收入(亿元)", "归母净利润(亿元)",
         "分红总金额(亿元)", "拆股情况",
         "营收YoY(%)", "净利YoY(%)",
-        "有息负债(亿元)", "无息负债(亿元)", "有息占比(%)",
         "分红率(%)",
     ]
     assert list(table.columns) == expected_order, (

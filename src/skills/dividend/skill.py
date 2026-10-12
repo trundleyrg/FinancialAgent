@@ -22,6 +22,7 @@ from src.skills.dividend.tools import (
     query_dividend_events,
     query_dividend_events_by_year,
     render_dividend_trend_chart,
+    render_debt_structure_chart,
     _is_financial_data_empty,
 )
 
@@ -376,6 +377,42 @@ def run(
             except Exception as exc:
                 logger.warning("分红趋势图/表生成失败: %s", exc)
 
+        # 独立的负债结构图(与分红率表格分开展示)
+        debt_chart_path: str | None = None
+        debt_table_path: str | None = None
+        if stock_code and report_year and debt_by_year:
+            try:
+                memory_dir = Path("data") / stock_code / "memory"
+                chart_dir = memory_dir / "charts"
+                chart_dir.mkdir(parents=True, exist_ok=True)
+                debt_png = chart_dir / f"debt_structure_{report_year}.png"
+                debt_csv = chart_dir / f"debt_structure_{report_year}.csv"
+
+                render_debt_structure_chart(
+                    debt_by_year, debt_png,
+                    title=f"{company_name} - 负债结构(有息 vs 无息)",
+                )
+
+                # 构造负债结构表(便于 markdown 嵌入 + 持久化 CSV)
+                import pandas as _pd
+                rows = []
+                for y in sorted(debt_by_year.keys()):
+                    i, ni, total, i_pct, _ = compute_debt_breakdown(debt_by_year[y])
+                    rows.append({
+                        "年份": y,
+                        "有息负债(亿元)": round(i / 1e8, 2),
+                        "无息负债(亿元)": round(ni / 1e8, 2),
+                        "总负债(亿元)": round(total / 1e8, 2) if total > 0 else 0.0,
+                        "有息占比(%)": i_pct,
+                    })
+                debt_df = _pd.DataFrame(rows).set_index("年份")
+                debt_df.to_csv(debt_csv, index_label="年份")
+                debt_chart_path = str(debt_png)
+                debt_table_path = str(debt_csv)
+                logger.info("负债结构图已生成: %s", debt_chart_path)
+            except Exception as exc:
+                logger.warning("负债结构图/表生成失败: %s", exc)
+
         # 持久化独立红利分析 markdown 报告(图在上、表在下 + LLM 结论)。
         # 失败仅 log warning,不影响 skill 整体;markdown 路径回填到 input_context。
         markdown_path: str | None = None
@@ -394,6 +431,21 @@ def run(
                         Path(chart_path).relative_to(memory_dir)
                         .as_posix()
                     )
+                # 负债结构图与表的相对路径(memory/charts/...)
+                debt_chart_rel: str | None = None
+                if debt_chart_path:
+                    debt_chart_rel = (
+                        Path(debt_chart_path).relative_to(memory_dir)
+                        .as_posix()
+                    )
+                # 读回 CSV 作为 markdown 嵌入表
+                debt_df_for_md = None
+                if debt_table_path:
+                    import pandas as _pd_debt
+                    debt_df_for_md = _pd_debt.read_csv(
+                        debt_table_path, index_col="年份"
+                    )
+
                 md_content = build_dividend_markdown(
                     result,
                     chart_path=chart_rel,
@@ -412,6 +464,9 @@ def run(
                     # 有息负债占比(多年负债结构,code 算) — 趋势表 + 关键指标二用
                     interest_debt_ratio_override=latest_interest_ratio,
                     interest_bearing_debt_override=latest_interest_debt,
+                    # 独立的负债结构 section(图 + 表,与分红率表格分开展示)
+                    debt_chart_path=debt_chart_rel,
+                    debt_table=debt_df_for_md,
                 )
                 md_path.write_text(md_content, encoding="utf-8")
                 markdown_path = str(md_path)
