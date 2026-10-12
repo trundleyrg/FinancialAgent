@@ -55,7 +55,8 @@ class FinancialReport(Model):
     report_period = CharField(max_length=10, null=False, index=True)  # 报告周期（Q1/H1/Q3/FY），用于查询索引
 
     source_file = CharField(max_length=500, null=True)  # 源PDF文件路径，用于追溯原始数据
-    created_at = DateTimeField(default=datetime.now)  # 记录创建时间，自动填充当前时间
+    created_at = DateTimeField(default=datetime.now)  # 记录创建时间
+    updated_at = DateTimeField(default=datetime.now)  # 记录更新时间,自动维护
 
     class Meta:
         database = db
@@ -74,6 +75,9 @@ class FinancialMetric(Model):
     period = CharField(max_length=50, null=True)  # 报告期间，如"年度"、"季度"等
     source_context = TextField(null=True)  # 指标在原报告中的上下文内容，用于溯源验证
     page_number = IntegerField(null=True)  # 指标在原报告中的页码位置
+
+    created_at = DateTimeField(default=datetime.now)  # 记录创建时间
+    updated_at = DateTimeField(default=datetime.now)  # 记录更新时间,自动维护
 
     class Meta:
         database = db
@@ -200,6 +204,10 @@ class ConsolidatedBalanceSheet(Model):
     total_owners_equity = FloatField(null=True, help_text="所有者权益（或股东权益）合计")  # 小计
     total_liabilities_and_owners_equity = FloatField(null=True, help_text="负债和所有者权益（或股东权益）总计")  # 合计
 
+    # 时间戳字段(自动维护)
+    created_at = DateTimeField(default=datetime.now)
+    updated_at = DateTimeField(default=datetime.now)
+
     class Meta:
         database = db
         table_name = 'consolidated_balance_sheet'
@@ -318,6 +326,10 @@ class ParentCompanyBalanceSheet(Model):
     total_owners_equity = FloatField(null=True, help_text="所有者权益（或股东权益）合计")  # 小计（无母公司/少数之分）
     total_liabilities_and_owners_equity = FloatField(null=True, help_text="负债和所有者权益（或股东权益）总计")  # 合计
 
+    # 时间戳字段(自动维护)
+    created_at = DateTimeField(default=datetime.now)
+    updated_at = DateTimeField(default=datetime.now)
+
     class Meta:
         database = db
         table_name = 'parent_company_balance_sheet'
@@ -415,6 +427,10 @@ class ConsolidatedIncomeStatement(Model):
     basic_eps = FloatField(null=True, help_text="（一）基本每股收益（元/股）")
     diluted_eps = FloatField(null=True, help_text="（二）稀释每股收益（元/股）")
 
+    # 时间戳字段(自动维护)
+    created_at = DateTimeField(default=datetime.now)
+    updated_at = DateTimeField(default=datetime.now)
+
     class Meta:
         database = db
         table_name = 'consolidated_income_statement'
@@ -496,6 +512,10 @@ class ParentCompanyIncomeStatement(Model):
     # ============ 七、每股收益 ============
     basic_eps = FloatField(null=True, help_text="（一）基本每股收益（元/股）")
     diluted_eps = FloatField(null=True, help_text="（二）稀释每股收益（元/股）")
+
+    # 时间戳字段(自动维护)
+    created_at = DateTimeField(default=datetime.now)
+    updated_at = DateTimeField(default=datetime.now)
 
     class Meta:
         database = db
@@ -581,6 +601,10 @@ class ConsolidatedCashFlowStatement(Model):
     beginning_cash = FloatField(null=True, help_text="加：期初现金及现金等价物余额")
     ending_cash = FloatField(null=True, help_text="六、期末现金及现金等价物余额")
 
+    # 时间戳字段(自动维护)
+    created_at = DateTimeField(default=datetime.now)
+    updated_at = DateTimeField(default=datetime.now)
+
     class Meta:
         database = db
         table_name = 'consolidated_cash_flow_statement'
@@ -653,6 +677,10 @@ class ParentCompanyCashFlowStatement(Model):
     beginning_cash = FloatField(null=True, help_text="加：期初现金及现金等价物余额")
     ending_cash = FloatField(null=True, help_text="六、期末现金及现金等价物余额")
 
+    # 时间戳字段(自动维护)
+    created_at = DateTimeField(default=datetime.now)
+    updated_at = DateTimeField(default=datetime.now)
+
     class Meta:
         database = db
         table_name = 'parent_company_cash_flow_statement'
@@ -709,6 +737,10 @@ class ShareStructure(Model):
     total_shares = FloatField(null=True, help_text="股份总数")
     total_shares_ratio = FloatField(null=True, help_text="股份总数比例(%)")
 
+    # 时间戳字段(自动维护)
+    created_at = DateTimeField(default=datetime.now)
+    updated_at = DateTimeField(default=datetime.now)
+
     class Meta:
         database = db
         table_name = 'share_structure'
@@ -744,7 +776,8 @@ class CapitalChangeEvent(Model):
 
     source = CharField(max_length=32, null=False)
     scheme_description = CharField(max_length=512, null=True)
-    created_at = DateTimeField(default=datetime.now)
+    created_at = DateTimeField(default=datetime.now)  # 记录创建时间
+    updated_at = DateTimeField(default=datetime.now)  # 记录更新时间,自动维护
 
     class Meta:
         database = db
@@ -776,7 +809,8 @@ class SkillAnalysisResult(Model):
     # LLM 输入上下文（财务数据 + 分析指标 + SKILL.md 指令的 JSON），
     # 便于 SQL 溯源「结论是基于哪些数据得出的」。
     input_context = TextField(null=True)
-    created_at = DateTimeField(default=datetime.now)
+    created_at = DateTimeField(default=datetime.now)  # 记录创建时间
+    updated_at = DateTimeField(default=datetime.now)  # 记录更新时间,自动维护
 
     class Meta:
         database = db
@@ -814,7 +848,8 @@ class StockMarketSnapshot(Model):
     total_market_cap = FloatField(null=True, help_text="总市值(元)")
 
     source = CharField(max_length=32, null=False)
-    created_at = DateTimeField(default=datetime.now)
+    created_at = DateTimeField(default=datetime.now)  # 记录创建时间
+    updated_at = DateTimeField(default=datetime.now)  # 记录更新时间,自动维护
 
     class Meta:
         database = db

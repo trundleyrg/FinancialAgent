@@ -24,7 +24,8 @@ from src.db.models import (
     ConsolidatedBalanceSheet, ParentCompanyBalanceSheet,
     ConsolidatedIncomeStatement, ParentCompanyIncomeStatement,
     ConsolidatedCashFlowStatement, ParentCompanyCashFlowStatement,
-    ShareStructure, CapitalChangeEvent, SkillAnalysisResult
+    ShareStructure, CapitalChangeEvent, SkillAnalysisResult,
+    StockMarketSnapshot,
 )
 from src.utils.logger import db_logger
 
@@ -37,10 +38,43 @@ class DuckDBModelAdapter:
     DuckDB模型适配器
     将Peewee模型操作转换为DuckDB SQL操作
     """
-    
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 时间戳自动维护工具(模块级纯函数)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _auto_fill_timestamps_on_insert(
+    model_class: Type[Model], data: Dict[str, Any],
+) -> Dict[str, Any]:
+    """INSERT 前自动维护 created_at / updated_at(若 caller 未传)。"""
+    fields = model_class._meta.fields
+    if "created_at" not in data and "created_at" in fields:
+        data["created_at"] = datetime.now()
+    if "updated_at" not in data and "updated_at" in fields:
+        data["updated_at"] = datetime.now()
+    return data
+
+
+def _auto_fill_timestamps_on_update(
+    model_class: Type[Model], updates: Dict[str, Any],
+) -> Dict[str, Any]:
+    """UPDATE 前自动维护 updated_at(若 caller 未传)。"""
+    fields = model_class._meta.fields
+    if "updated_at" not in updates and "updated_at" in fields:
+        updates["updated_at"] = datetime.now()
+    return updates
+
+
+class DuckDBModelAdapter:
+    """
+    DuckDB模型适配器
+    将Peewee模型操作转换为DuckDB SQL操作
+    """
+
     def __init__(self, conn: duckdb.DuckDBPyConnection):
         self.conn = conn
-    
+
     def _get_table_name(self, model_class: Type[Model]) -> str:
         """获取模型对应的表名"""
         return model_class._meta.table_name
@@ -69,20 +103,57 @@ class DuckDBModelAdapter:
         return data
     
     def create(self, model_instance: Model) -> int:
-        """创建记录，返回id"""
+        """创建记录,返回 id。
+
+        自动维护 created_at / updated_at:若 model_instance 上未指定,补为 now()。
+        """
         table_name = self._get_table_name(type(model_instance))
         data = self._model_to_dict(model_instance)
-        
+
         if not data:
             raise ValueError("没有数据要插入")
-        
+
+        # 自动时间戳:caller 可显式传值覆盖,默认填 now()
+        _auto_fill_timestamps_on_insert(type(model_instance), data)
+
         columns = list(data.keys())
         placeholders = ['?' for _ in columns]
         values = list(data.values())
-        
+
         sql = f"INSERT INTO {table_name} ({', '.join(columns)}) VALUES ({', '.join(placeholders)}) RETURNING id"
         result = self.conn.execute(sql, values)
         return result.fetchone()[0]
+
+    def insert(
+        self, model_class: Type[Model], data: Dict[str, Any],
+    ) -> int:
+        """按 dict 插入一行,返回新行 id。
+
+        自动维护 created_at / updated_at(caller 未传则填 now())。
+        这是 *_by_id 类以外的轻量入口,适合 dict 已构造好、不走 ORM 字段名映射的场景。
+
+        Args:
+            model_class: Peewee Model 类(决定表名 + 时间戳字段是否存在)
+            data: 待插入的列值 dict;**会被修改**(注入 created_at / updated_at)
+
+        Returns:
+            新行的 id(int)。出错抛出。
+        """
+        table_name = model_class._meta.table_name
+        _auto_fill_timestamps_on_insert(model_class, data)
+        columns = list(data.keys())
+        placeholders = ['?'] * len(columns)
+        sql = (
+            f"INSERT INTO {table_name} ({', '.join(columns)}) "
+            f"VALUES ({', '.join(placeholders)}) RETURNING id"
+        )
+        cur = self._duckdb_conn.execute(sql, list(data.values()))
+        row = cur.fetchone()
+        if row is None:
+            raise RuntimeError(
+                f"insert {table_name}: RETURNING 无结果"
+            )
+        return int(row[0])
     
     def get_by_id(self, model_class: Type[Model], record_id: int) -> Optional[Dict[str, Any]]:
         """根据id获取记录"""
@@ -127,17 +198,20 @@ class DuckDBModelAdapter:
     def update(self, model_class: Type[Model], record_id: int, **kwargs) -> bool:
         """更新记录"""
         table_name = self._get_table_name(model_class)
-        
+
         if not kwargs:
             return False
-        
+
+        # 自动维护 updated_at:把 kwargs 当作 updates dict
+        kwargs = _auto_fill_timestamps_on_update(model_class, dict(kwargs))
+
         set_clauses = []
         values = []
         for key, value in kwargs.items():
             set_clauses.append(f"{key} = ?")
             values.append(value)
         values.append(record_id)
-        
+
         sql = f"UPDATE {table_name} SET {', '.join(set_clauses)} WHERE id = ?"
         self.conn.execute(sql, values)
         return True
@@ -154,18 +228,22 @@ class DuckDBModelAdapter:
     ) -> int:
         """按 kwargs 过滤批量更新记录。返回受影响的行数。
 
-        DuckDB 的 rowcount 在 UPDATE/DELETE 上不可靠（部分版本恒为 -1），
+        自动维护 updated_at:caller 未传则填 now()。caller 显式传值尊重。
+
+        DuckDB 的 rowcount 在 UPDATE/DELETE 上不可靠(部分版本恒为 -1),
         因此借助 RETURNING 收集受影响行的 id 来精确计数。
 
-        SQL 安全：updates 与 kwargs 的所有 key 都必须命中模型字段白名单，
+        SQL 安全:updates 与 kwargs 的所有 key 都必须命中模型字段白名单,
         避免外部传入恶意 key 拼接成注入。
         """
         if not updates:
             return 0
         if not kwargs:
             raise ValueError(
-                "update_records 需要至少一个过滤条件，避免误更新整张表",
+                "update_records 需要至少一个过滤条件,避免误更新整张表",
             )
+        # 自动时间戳:每次 UPDATE 都刷新 updated_at
+        _auto_fill_timestamps_on_update(model_class, updates)
         valid_columns = set(model_class._meta.fields.keys())
         for k in updates.keys():
             if k not in valid_columns:
@@ -283,9 +361,12 @@ class DatabaseConnector:
         # 创建DuckDB连接
         self._duckdb_conn = duckdb.connect(database_url)
         self._duckdb_adapter = DuckDBModelAdapter(self._duckdb_conn)
-        
-        # 为Peewee模型初始化一个内存数据库（用于模型定义）
+
+        # 为Peewee模型初始化一个内存数据库(用于模型定义)
         self.engine = SqliteDatabase(":memory:")
+
+        # 注册 Peewee pre_save 信号:ORM save() 时自动维护时间戳
+        self._register_timestamp_signals()
         db.initialize(self.engine)
 
     def create_tables(self):
@@ -303,6 +384,64 @@ class DatabaseConnector:
             self.engine.create_tables(tables, safe=True)
             db_logger.info("PostgreSQL表格创建完成")
 
+    def _register_timestamp_signals(self):
+        """注册 Peewee Model.save() 自动维护时间戳(monkey-patch)。
+
+        ⚠️ Peewee 本身没有 pre_save 信号模块(曾试图 `import peewee.signals` 失败),
+        所以这里走 monkey-patch 路线:在每个 Model 类上替换 `save` 方法,
+        包一层,调用前自动维护 created_at / updated_at。
+
+        适用:
+        - Model.create(...) → 内部调 save → 触发自动维护
+        - instance.save() / instance.save(force_insert=True)
+
+        不适用:
+        - bulk_create / insert_many(无 save 调用)— 走 insert_record / update_records,
+          已各自内置自动维护
+
+        行为:
+        - 新记录(无主键或 force_insert=True):created_at 与 updated_at 都填 now()
+        - 更新(有主键):仅刷新 updated_at,不动 created_at
+        - 若 caller 已显式设了字段,尊重其值
+        """
+        sender_classes = [
+            FinancialReport, FinancialMetric,
+            ConsolidatedBalanceSheet, ParentCompanyBalanceSheet,
+            ConsolidatedIncomeStatement, ParentCompanyIncomeStatement,
+            ConsolidatedCashFlowStatement, ParentCompanyCashFlowStatement,
+            ShareStructure, CapitalChangeEvent,
+            SkillAnalysisResult, StockMarketSnapshot,
+        ]
+
+        def _wrap_save(model_class):
+            """给 model_class 包装一个自动维护时间戳的 save 方法。"""
+            original_save = model_class.save
+
+            def _auto_timestamp_save(self, *args, **kwargs):
+                # 判断是 INSERT 还是 UPDATE:
+                # - force_insert=True → INSERT
+                # - 或主键未设置(self._pk is None)→ INSERT
+                # - 否则 UPDATE
+                force_insert = kwargs.get("force_insert", False)
+                is_insert = (
+                    force_insert
+                    or self._pk is None
+                    or (isinstance(self._pk, bool) and not self._pk)
+                )
+                fields = model_class._meta.fields
+                now = datetime.now()
+                if is_insert and "created_at" in fields:
+                    if getattr(self, "created_at", None) is None:
+                        setattr(self, "created_at", now)
+                if "updated_at" in fields:
+                    setattr(self, "updated_at", now)
+                return original_save(self, *args, **kwargs)
+
+            model_class.save = _auto_timestamp_save
+
+        for cls in sender_classes:
+            _wrap_save(cls)
+
     def _create_duckdb_tables(self):
         """
         使用DuckDB创建所有数据表
@@ -315,7 +454,7 @@ class DatabaseConnector:
             ConsolidatedIncomeStatement, ParentCompanyIncomeStatement,
             ConsolidatedCashFlowStatement, ParentCompanyCashFlowStatement,
             ShareStructure, CapitalChangeEvent,
-            SkillAnalysisResult,
+            SkillAnalysisResult, StockMarketSnapshot,
         ]
         
         for table in tables:
@@ -326,43 +465,44 @@ class DatabaseConnector:
     def _create_duckdb_table_for_model(self, model_class: Type[Model]):
         """
         根据Peewee模型创建对应的DuckDB表
+
+        增量式 schema 演进:即使表已存在,也确保新增的 created_at / updated_at
+        列已就位(ALTER TABLE ADD COLUMN),并对 NULL 历史行回填默认值。
         """
         table_name = model_class._meta.table_name
         fields = model_class._meta.fields
-        
-        # 检查表是否已存在
-        result = self._duckdb_conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
-            [table_name]
-        ).fetchone()
-        
-        if result:
-            db_logger.debug(f"表 {table_name} 已存在，跳过创建")
+
+        # ── 表是否已存在(DuckDB 用 information_schema) ──
+        existing_cols = self._table_columns(table_name)
+
+        if existing_cols:
+            db_logger.debug(f"表 {table_name} 已存在,执行列级迁移")
+            self._migrate_add_timestamp_columns(table_name, model_class)
             return
-        
-        # 创建序列（用于自增ID）
+
+        # 新建表流程
         seq_name = f"seq_{table_name}_id"
         self._duckdb_conn.execute(f"CREATE SEQUENCE IF NOT EXISTS {seq_name} START 1")
-        
+
         # 构建列定义
         columns = []
         foreign_keys = []
-        
+
         for field_name, field in fields.items():
             column_def = self._peewee_field_to_duckdb_sql(field_name, field)
             if column_def:
                 columns.append(column_def)
-            
-            # 处理外键 - 使用 column_name（如 report_id）
+
+            # 处理外键 - 使用 column_name(如 report_id)
             if isinstance(field, ForeignKeyField):
                 ref_table = field.rel_model._meta.table_name
                 foreign_keys.append(
                     f"FOREIGN KEY ({field.column_name}) REFERENCES {ref_table}(id)"
                 )
-        
+
         # 添加外键约束
         columns.extend(foreign_keys)
-        
+
         # 构建完整的CREATE TABLE语句
         columns_sql = ",\n                ".join(columns)
         create_sql = f"""
@@ -370,10 +510,67 @@ class DatabaseConnector:
                 {columns_sql}
             )
         """
-        
+
         self._duckdb_conn.execute(create_sql)
         db_logger.debug(f"表 {table_name} 创建成功")
-    
+
+    def _table_columns(self, table_name: str) -> set[str]:
+        """读出 DuckDB 表已有的列名集合。表不存在 → 空集。"""
+        try:
+            rows = self._duckdb_conn.execute(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_name = ?",
+                [table_name],
+            ).fetchall()
+        except Exception:
+            return set()
+        return {r[0] for r in rows}
+
+    def _migrate_add_timestamp_columns(
+        self, table_name: str, model_class: Type[Model],
+    ):
+        """对已存在的表,补 created_at / updated_at 列 + 回填历史行。
+
+        安全:可重复执行(列已存在则跳过 ALTER)。
+        历史行 created_at / updated_at 默认回填为 now()。
+        """
+        existing = self._table_columns(table_name)
+        fields = model_class._meta.fields
+        now = datetime.now()
+
+        if "created_at" in fields and "created_at" not in existing:
+            try:
+                self._duckdb_conn.execute(
+                    f"ALTER TABLE {table_name} "
+                    f"ADD COLUMN created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
+                )
+                db_logger.info(f"{table_name}: 已加 created_at 列")
+            except Exception as exc:
+                db_logger.warning(f"{table_name}: 加 created_at 列失败: {exc}")
+
+        if "updated_at" in fields and "updated_at" not in existing:
+            try:
+                self._duckdb_conn.execute(
+                    f"ALTER TABLE {table_name} "
+                    f"ADD COLUMN updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
+                )
+                db_logger.info(f"{table_name}: 已加 updated_at 列")
+            except Exception as exc:
+                db_logger.warning(f"{table_name}: 加 updated_at 列失败: {exc}")
+
+        # 回填历史行:已存在但时间戳为 NULL 的行(ALTER 加列时会留 NULL)
+        try:
+            self._duckdb_conn.execute(
+                f"UPDATE {table_name} SET created_at = ? WHERE created_at IS NULL",
+                [now],
+            )
+            self._duckdb_conn.execute(
+                f"UPDATE {table_name} SET updated_at = ? WHERE updated_at IS NULL",
+                [now],
+            )
+        except Exception as exc:
+            db_logger.warning(f"{table_name}: 回填时间戳失败: {exc}")
+
     def _peewee_field_to_duckdb_sql(self, field_name: str, field: Field) -> str:
         """
         将Peewee字段转换为DuckDB SQL列定义
@@ -460,7 +657,7 @@ class DatabaseConnector:
         :return: 新创建记录的 ID
         """
         model_class = self._get_model_class(table_name)
-        
+
         if self.database_type == "duckdb":
             # 创建模型实例
             instance = model_class(**kwargs)
@@ -469,6 +666,37 @@ class DatabaseConnector:
             # PostgreSQL 使用 Peewee
             instance = model_class.create(**kwargs)
             return instance.id
+
+    def insert(
+        self, model_class: Type[Model], data: Dict[str, Any],
+    ) -> int:
+        """按 dict 插入一行,返回新行 id。
+
+        自动维护 created_at / updated_at(caller 未传则填 now())。
+        这是 *_by_id 类以外的轻量入口,适合 dict 已构造好、不走 ORM 字段名映射的场景。
+
+        Args:
+            model_class: Peewee Model 类(决定表名 + 时间戳字段是否存在)
+            data: 待插入的列值 dict;**会被修改**(注入 created_at / updated_at)
+
+        Returns:
+            新行的 id(int)。出错抛出。
+        """
+        _auto_fill_timestamps_on_insert(model_class, data)
+        table_name = model_class._meta.table_name
+        columns = list(data.keys())
+        placeholders = ['?'] * len(columns)
+        sql = (
+            f"INSERT INTO {table_name} ({', '.join(columns)}) "
+            f"VALUES ({', '.join(placeholders)}) RETURNING id"
+        )
+        cur = self._duckdb_conn.execute(sql, list(data.values()))
+        row = cur.fetchone()
+        if row is None:
+            raise RuntimeError(
+                f"insert {table_name}: RETURNING 无结果"
+            )
+        return int(row[0])
 
     def get_by_id(self, table_name: str, record_id: int) -> Optional[Model]:
         """
