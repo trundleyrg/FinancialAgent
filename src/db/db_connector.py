@@ -1281,12 +1281,32 @@ def _parse_table_data_to_model_data(
             if len(suffix_matches) == 1:
                 canonical_field = suffix_matches[0]
 
-        # Stage 2: help_text substring match (current behavior).
+        # Stage 2: help_text substring match.
+        # 长 help_text 优先匹配(更具体的科目,如「流动负债合计」先于「负债合计」)。
+        # 严格 long→short(help_text in item_name_normalized) — 防止短字符串
+        # 「负债合计」被反向子串误吞到「流动负债合计」。
+        # 反向补充(item_name_normalized in help_text)仅在「不是后缀」时启用,
+        # 兼容「总资产」↔「资产总计」这种短串换序(但排除「负债合计」in「流动负债合计」
+        # 这种后缀误吞)。
         if not canonical_field:
-            for help_text, fn in field_help_text_map.items():
+            for help_text, fn in sorted(
+                field_help_text_map.items(),
+                key=lambda kv: len(kv[0]),
+                reverse=True,
+            ):
                 if fn in invalid_for_parent:
                     continue
-                if help_text in item_name_normalized or item_name_normalized in help_text:
+                if not help_text:
+                    continue
+                if help_text in item_name_normalized:
+                    field_name = fn
+                    break
+                # 反向补充:短 item 名是长 help_text 的**非后缀**子串时(如「总资产」在「资产总计」中)
+                if (
+                    item_name_normalized
+                    and item_name_normalized in help_text
+                    and not help_text.endswith(item_name_normalized)
+                ):
                     field_name = fn
                     break
 
