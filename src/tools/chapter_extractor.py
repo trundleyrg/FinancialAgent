@@ -594,6 +594,13 @@ class PDFChapterExtractor:
     def extract_main_tables(self) -> Dict[str, Optional[TableWithHeader]]:
         """
         获取主要表
+
+        解析顺序:
+        1. 主路径:通过 toc 找章节起止页,extract_section_tables
+        2. Fallback:若章节没在 toc 里(某些 PDF 的 toc 只到二级章节,
+           "合并资产负债表" 嵌在 "二、财务报表" 章节里),
+           扫描 PDF 全文,找含 section_title 的页面作为 start,
+           到下一个同类章节标题作为 end
         """
         # 主要表情况
         main_tables = {
@@ -607,7 +614,15 @@ class PDFChapterExtractor:
         }
         # 提取主要报表
         for section_title in main_tables.keys():
-            tables = self.extract_section_tables(section_title, section_level=3)
+            try:
+                tables = self.extract_section_tables(section_title, section_level=3)
+            except ValueError as exc:
+                # TOC 解析失败 → 直接走文本扫描 fallback
+                chapter_logger.debug(
+                    "extract_section_tables(%s) 失败,走文本扫描 fallback: %s",
+                    section_title, exc,
+                )
+                tables = []
             if len(tables) > 1:
                 # 当前页中找到两个以上的表格，判断表头前的文本中是否出现相关文本
                 find_table = False
@@ -619,11 +634,63 @@ class PDFChapterExtractor:
                 if not find_table:
                     chapter_logger.error(f"未找到{section_title}")
             elif len(tables) < 1:
-                main_tables[section_title] = None
-                chapter_logger.error(f"未找到{section_title}")
+                # Fallback:全文扫描找含 section_title 的页
+                fallback_tables = self._extract_main_table_by_text_fallback(section_title)
+                if fallback_tables is not None and len(fallback_tables) > 0:
+                    main_tables[section_title] = fallback_tables[0]
+                    chapter_logger.info(
+                        f"通过文本扫描 fallback 提取 {section_title}: {fallback_tables[0].page_start_num+1}-"
+                    + str(fallback_tables[0].page_end_num+1)
+                    )
+                else:
+                    main_tables[section_title] = None
+                    chapter_logger.error(f"未找到{section_title}")
             else:
-                main_tables[section_title] = tables[0]   
+                main_tables[section_title] = tables[0]
         return main_tables
+
+    def _extract_main_table_by_text_fallback(
+        self, section_title: str,
+    ) -> List[TableWithHeader]:
+        """Fallback:某些 PDF 的 toc 没标"合并资产负债表"等子章节,
+        但页面正文第一行就是该标题。用全文文本扫描定位起止页。
+
+        启发式:
+        - start_page = 第一个含 section_title 行的页
+        - end_page = 下一个含同等"X母公司/合并/审计意见"等标题的页
+          或下一个 L1/L2 大章节
+        - 然后 extract_tables_in_section(start, end)
+        """
+        import fitz as _fitz
+        start_page = None
+        for page_idx in range(len(self.doc)):
+            text = self.doc[page_idx].get_text()
+            lines = [l.strip() for l in text.split('\n') if l.strip()]
+            if section_title in lines:
+                start_page = page_idx
+                break
+        if start_page is None:
+            return []
+
+        # 找下一个同类大章节作为结束(母公司/合并/审计意见/财务报表)
+        end_page = len(self.doc) - 1
+        # 同类报表标记(同主题不同版本)优先
+        sibling_markers = ["母公司", "合并", "审计意见", "审计报告",
+                            "财务报表的编制基础", "重要会计政策"]
+        # 也包含任何"二、财务报表" / "三、重要事项"等大纲章节
+        toc_end_markers = ["十、财务报告", "十、财务报表"]
+        for page_idx in range(start_page + 1, len(self.doc)):
+            text = self.doc[page_idx].get_text()
+            lines = [l.strip() for l in text.split('\n') if l.strip()][:8]
+            for marker in sibling_markers + toc_end_markers:
+                if marker in lines and marker != section_title.replace("合并", "").replace("母公司", ""):
+                    end_page = page_idx - 1
+                    break
+            if end_page != len(self.doc) - 1:
+                break
+        # 兜底:最多取 5 页
+        end_page = min(end_page, start_page + 8)
+        return self.extract_tables_in_section(start_page, end_page)
 
     def _extract_core_title(self, title: str) -> str:
         """

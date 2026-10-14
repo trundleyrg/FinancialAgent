@@ -635,8 +635,8 @@ def extract_dividend_info(
             yield = per_share_dividend / current_price × 100
             per_share_dividend = cash_dividend_paid / total_shares
     """
-    income_statement = financial_data.get("income_statement", {})
-    cash_flow = financial_data.get("cash_flow", {})
+    income_statement = financial_data.get("income_statement") or {}
+    cash_flow = financial_data.get("cash_flow") or {}
 
     net_profit = _pick_net_profit(income_statement)
     operating_cash_flow = (
