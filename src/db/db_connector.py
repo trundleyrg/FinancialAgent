@@ -1410,7 +1410,12 @@ def filter_table_by_period(
     if not report_period:
         report_period = "FY"
 
-    if table_obj is None or not table_obj.table_data or len(table_obj.table_data) < 1:
+    if (
+        table_obj is None
+        or not hasattr(table_obj, "table_data")
+        or not table_obj.table_data
+        or len(table_obj.table_data) < 1
+    ):
         return table_obj
 
     table_data = table_obj.table_data

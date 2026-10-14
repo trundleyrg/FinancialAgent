@@ -105,7 +105,8 @@ def parse_pdf_to_db(pdf_path: Path) -> dict[str, int]:
         excel_base = f"./data/excel/{company_short_name}_{report_year}"
         os.makedirs(excel_base, exist_ok=True)
         for table_name, table_obj in main_tables.items():
-            if table_obj is None or not table_obj.table_data:
+            # 防御性:fallback 偶发返非 TableWithHeader 类型(如 600285 2020 PDF 的"股份变动情况")
+            if not hasattr(table_obj, "table_data") or not table_obj.table_data:
                 continue
             safe = table_name.replace("/", "_").replace("\\", "_").replace(":", "_")
             df = pd.DataFrame(table_obj.table_data)

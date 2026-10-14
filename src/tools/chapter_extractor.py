@@ -636,7 +636,8 @@ class PDFChapterExtractor:
             elif len(tables) < 1:
                 # Fallback:全文扫描找含 section_title 的页
                 fallback_tables = self._extract_main_table_by_text_fallback(section_title)
-                if fallback_tables is not None and len(fallback_tables) > 0:
+                # 类型保护:_extract_main_table_by_text_fallback 已过滤非 TableWithHeader
+                if fallback_tables:
                     main_tables[section_title] = fallback_tables[0]
                     chapter_logger.info(
                         f"通过文本扫描 fallback 提取 {section_title}: {fallback_tables[0].page_start_num+1}-"
@@ -690,7 +691,10 @@ class PDFChapterExtractor:
                 break
         # 兜底:最多取 5 页
         end_page = min(end_page, start_page + 8)
-        return self.extract_tables_in_section(start_page, end_page)
+        result = self.extract_tables_in_section(start_page, end_page)
+        # 类型保护:防御性过滤非 TableWithHeader 元素(罕见但 600285 2020 触发过)
+        from src.db.table_models import TableWithHeader as _TWH
+        return [t for t in result if isinstance(t, _TWH)]
 
     def _extract_core_title(self, title: str) -> str:
         """
