@@ -1064,6 +1064,9 @@ TABLE_NAME_TO_MODEL = {
     'parent_company_cash_flow_statement': ParentCompanyCashFlowStatement,
     # 股份变动情况表
     '股份变动情况表': ShareStructure,
+    # 别名:有些 PDF 抽取器返回的章节标题不带"表"字(仅 "股份变动情况"),
+    # 同样映射到 ShareStructure,以保证通用性。
+    '股份变动情况': ShareStructure,
     'share_structure': ShareStructure,
 }
 
@@ -1621,9 +1624,17 @@ def save_tables_to_db(main_tables: Dict[str, Any], company_name: str, pdf_path:s
         if table_obj is None:
             continue
 
+        # 防御:chapter_extractor 偶发将未成功抽取的章节以原始常量(如 list)返回,
+        # 这种对象没有 ``table_data`` 字段,直接保存会 AttributeError。这里过滤掉。
+        if not hasattr(table_obj, "table_data"):
+            db_logger.warning(
+                f"表格 {table_name} 非 TableWithHeader 实例(类型={type(table_obj).__name__}),跳过保存",
+            )
+            continue
+
         # 根据报告期间和年份过滤表格列
         table_obj = filter_table_by_period(table_obj, report_period, report_year)
-    
+
         # 标准化表格名称
         normalized_name = _normalize_table_name(table_name)
         model_class = TABLE_NAME_TO_MODEL.get(normalized_name)
