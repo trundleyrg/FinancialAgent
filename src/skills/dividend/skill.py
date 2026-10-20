@@ -294,27 +294,49 @@ def run(
         # 6. 调用 LLM（JSON 输出）
         # 把 system_msg / user_msg 套一层 {var} 模板，避免 ChatPromptTemplate
         # 把 JSON 中的 {x: y} 当成占位符解析（f-string 嵌套字段报错）。
-        chain = (
-            ChatPromptTemplate.from_messages([
-                ("system", "{system}"),
-                ("human", "{user}"),
-            ])
-            | llm | JsonOutputParser()
-        )
-        result = None
-        # 整链重试：MiniMax M3.1-Flash-Preview 偶发返回空 → JsonOutputParser
-        # 抛 OutputParserException（"Invalid json output"）。链级重试可覆盖
-        # LLM 层 4 次空响应仍未恢复的情况。
-        import time as _time
-        for _chain_attempt in range(3):
-            try:
-                result = chain.invoke({"system": system_msg, "user": user_msg})
-                break
-            except Exception as chain_exc:
-                if "Invalid json output" in str(chain_exc) and _chain_attempt < 2:
-                    _time.sleep(1.5)
-                    continue
-                raise chain_exc
+        # 兜底：llm is None 时（NO_LLM=1 / LLM 配置失败 / 网络故障）走 code-only 分支，
+        # 只用代码计算的指标装配结果，避免 ``| None`` 链构造抛 ``Runnable`` 错。
+        if llm is None:
+            result = {
+                "investment_rating": "HOLD",
+                "reasoning": (
+                    "code-only 模式(未调用 LLM)。基于财务数据 + 资本事件 + 负债结构,"
+                    "评级默认值。请人工复核或恢复 LLM 后重跑。"
+                ),
+                "dividend_yield": dividend_info.get("dividend_yield"),
+                "payout_ratio": dividend_info.get("payout_ratio"),
+                "dividend_stability_years": dividend_info.get("dividend_stability_years"),
+                "cash_flow_coverage": dividend_info.get("cash_flow_coverage"),
+                "interest_debt_ratio": dividend_info.get("interest_debt_ratio"),
+                "interest_bearing_debt": dividend_info.get("interest_bearing_debt"),
+                "financial_health_score": dividend_info.get("financial_health_score"),
+                "profitability": profitability,
+                "solvency": solvency,
+                "valuation": {},
+                "risk_factors": dividend_info.get("risk_factors", []),
+            }
+        else:
+            chain = (
+                ChatPromptTemplate.from_messages([
+                    ("system", "{system}"),
+                    ("human", "{user}"),
+                ])
+                | llm | JsonOutputParser()
+            )
+            result = None
+            # 整链重试：MiniMax M3.1-Flash-Preview 偶发返回空 → JsonOutputParser
+            # 抛 OutputParserException（"Invalid json output"）。链级重试可覆盖
+            # LLM 层 4 次空响应仍未恢复的情况。
+            import time as _time
+            for _chain_attempt in range(3):
+                try:
+                    result = chain.invoke({"system": system_msg, "user": user_msg})
+                    break
+                except Exception as chain_exc:
+                    if "Invalid json output" in str(chain_exc) and _chain_attempt < 2:
+                        _time.sleep(1.5)
+                        continue
+                    raise chain_exc
 
         # 兜底：MiniMax 在缺估值数据时倾向回 null investment_rating，
         # 此处补默认 HOLD 并在 reasoning 末尾加备注，便于 SQL 检索。
