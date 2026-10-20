@@ -588,6 +588,13 @@ def fetch_total_shares_by_year(
 
     注意:同一公司在不同年份的 total_shares 可能因送转/增发而变化——分年取值
     才能让 ``(cash_per_10_shares / 10) × total_shares`` 算申报分红总额时用对股本。
+
+    兜底 (fallback):在 ``[start_year, end_year]`` 窗口内某一年 share_structure 缺失
+    或 ``total_shares`` 为 NULL 时,**先用同年段内其他年份前/后承接填充**;
+    同年段内完全无数据时,再向更早/更晚年份做一次扩展查询,以最近一年的值兜底。
+    这是通用兜底:任何股票 share_structure 抽取稀疏(常见问题:PDF 章节里没显式
+    「股份总数」行、或解析器把零值/空单元格误判)都可由此函数自动复用最近一年的值,
+    而不是返空让上游算出 0 元分红的退化结果。
     """
     try:
         conn = get_db()._duckdb_conn
@@ -603,7 +610,35 @@ def fetch_total_shares_by_year(
         """,
         [stock_code, start_year, end_year, period],
     ).fetchall()
-    return {str(r[0]): float(r[1]) for r in rows if r[1] is not None}
+    by_year: dict[str, float] = {str(r[0]): float(r[1]) for r in rows if r[1] is not None}
+
+    expected_years = list(range(start_year, end_year + 1))
+    missing_years = [y for y in expected_years if str(y) not in by_year]
+    if missing_years:
+        # 扩展查询:在窗口外找任何非 NULL 的 total_shares,作为年段外的兜底池
+        extended = conn.execute(
+            """
+            SELECT report_year, total_shares FROM share_structure
+            WHERE stock_code = ?
+              AND report_period = ?
+              AND total_shares IS NOT NULL
+              AND (report_year < ? OR report_year > ?)
+            ORDER BY report_year
+            """,
+            [stock_code, period, start_year, end_year],
+        ).fetchall()
+        extended_years = [(int(r[0]), float(r[1])) for r in extended if r[1] is not None]
+
+        # 候选兜底:同年段已有数据 ∪ 扩展查询得到的年份
+        # (同年段里有部分数据时,优先用窗口内的最近值)
+        candidate_pool = {int(y): float(by_year[str(y)]) for y in by_year.keys()}
+        candidate_pool.update({y: v for y, v in extended_years})
+
+        if candidate_pool:
+            for y in missing_years:
+                nearest = min(candidate_pool.keys(), key=lambda ky: abs(ky - y))
+                by_year[str(y)] = candidate_pool[nearest]
+    return by_year
 
 
 def extract_dividend_info(
