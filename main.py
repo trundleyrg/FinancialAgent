@@ -168,6 +168,10 @@ def run_dividend_analysis(
         "stock_types": ["dividend"],
     }
 
+    # 支持环境变量强制跳过 LLM(便于冒烟测试/网络故障时验证 skill 数据通路)
+    if os.environ.get("NO_LLM", "0") == "1":
+        use_llm = False
+
     llm = None
     if use_llm:
         try:
