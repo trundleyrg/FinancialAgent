@@ -6,12 +6,14 @@ FinancialAgent 统一入口
   2. parse    — 用 PDFChapterExtractor 提取主要财务表格
   3. persist  — 写入 DuckDB(consolidated_balance_sheet / income_statement / cash_flow_statement / share_structure)
   4. dividend — 跑红利股分析,产出 markdown 报告 + CSV 趋势 + 负债结构图
+  5. 分红公告 — 巨潮搜「权益分派」公告 + 解析 PDF 派息额 + 入库到 capital_change_events
 
 命令:
-  python main.py download <code> [year ...]       只下载
+  python main.py download <code> [year ...]       只下载年报
   python main.py parse <pdf_path>                  只解析
   python main.py analyze <code> [year]            跑红利分析(假设已入库)
   python main.py run <code> [year ...]            完整流程 download→parse→analyze
+  python main.py dividend <code> [year ...]        拉取分红派息公告 + 入库
   python main.py batch <file>                     批量处理(file 每行: code year)
 
 默认参数:
@@ -255,6 +257,16 @@ def main():
         code = sys.argv[2] if len(sys.argv) > 2 else DEFAULT_CODE
         year = int(sys.argv[3]) if len(sys.argv) > 3 else DEFAULT_YEAR
         run_dividend_analysis(code, year)
+
+    elif cmd == "dividend":
+        # python main.py dividend 600285 2020 2021 2022 2023 2024
+        # 拉取巨潮「权益分派」公告 + 解析 PDF 派息额 + 入库 capital_change_events
+        from src.tools.download_cninfo_reports import (
+            query_dividend_announcements_and_persist,
+        )
+        code = sys.argv[2] if len(sys.argv) > 2 else DEFAULT_CODE
+        years = [int(y) for y in sys.argv[3:]] if len(sys.argv) > 3 else [DEFAULT_YEAR]
+        query_dividend_announcements_and_persist(code, years)
 
     elif cmd == "run":
         # python main.py run 600285 2024 2023

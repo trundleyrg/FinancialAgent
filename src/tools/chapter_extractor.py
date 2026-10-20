@@ -638,10 +638,27 @@ class PDFChapterExtractor:
                 fallback_tables = self._extract_main_table_by_text_fallback(section_title)
                 # 类型保护:_extract_main_table_by_text_fallback 已过滤非 TableWithHeader
                 if fallback_tables:
-                    main_tables[section_title] = fallback_tables[0]
+                    # 多表时优先选 header_text 含 section_title 的表。
+                    # 这是必要的:典型场景(start_page 是报表跨页边界,即前一报表
+                    # 余尾与本报表头部落在同一 PDF 页),PyMuPDF 会把两段都识别为
+                    # 独立表格,fallback 列表里第一项往往仍指向前一报表(BS 残余)。
+                    # 与上面 len(tables) > 1 分支的多表选择规则保持一致。
+                    picked = next(
+                        (t for t in fallback_tables
+                         if section_title in (t.header_text or "")),
+                        None,
+                    )
+                    if picked is None:
+                        # 都没匹配上时降级回首张,但记 warning 便于排查
+                        picked = fallback_tables[0]
+                        chapter_logger.warning(
+                            f"fallback 多表均不匹配 {section_title};"
+                            f"降级用首张, header={picked.header_text!r}",
+                        )
+                    main_tables[section_title] = picked
                     chapter_logger.info(
-                        f"通过文本扫描 fallback 提取 {section_title}: {fallback_tables[0].page_start_num+1}-"
-                    + str(fallback_tables[0].page_end_num+1)
+                        f"通过文本扫描 fallback 提取 {section_title}: {picked.page_start_num+1}-"
+                    + str(picked.page_end_num+1)
                     )
                 else:
                     main_tables[section_title] = None

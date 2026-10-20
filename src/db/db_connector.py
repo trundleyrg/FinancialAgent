@@ -468,6 +468,7 @@ class DatabaseConnector:
 
         增量式 schema 演进:即使表已存在,也确保新增的 created_at / updated_at
         列已就位(ALTER TABLE ADD COLUMN),并对 NULL 历史行回填默认值。
+        同时补 model 定义里有但老表缺失的其他简单列(如 total_shares)。
         """
         table_name = model_class._meta.table_name
         fields = model_class._meta.fields
@@ -478,6 +479,7 @@ class DatabaseConnector:
         if existing_cols:
             db_logger.debug(f"表 {table_name} 已存在,执行列级迁移")
             self._migrate_add_timestamp_columns(table_name, model_class)
+            self._migrate_add_missing_columns(table_name, model_class)
             return
 
         # 新建表流程
@@ -570,6 +572,47 @@ class DatabaseConnector:
             )
         except Exception as exc:
             db_logger.warning(f"{table_name}: 回填时间戳失败: {exc}")
+
+    def _migrate_add_missing_columns(
+        self, table_name: str, model_class: Type[Model],
+    ):
+        """对已存在的表,补 model 定义里有但 DB 缺失的列(FLOAT/TEXT 类)。
+
+        适用场景:老表 create 时没建某列(如 capital_change_events 旧版缺
+        total_shares / total_shares_ratio),后续模型加字段后老表无法直接写。
+
+        安全:可重复执行(已存在则跳过)。
+        """
+        existing = self._table_columns(table_name)
+        fields = model_class._meta.fields
+        for field_name, field in fields.items():
+            if field_name in existing or field_name in ("id",):
+                continue
+            if isinstance(field, AutoField):
+                continue
+            # 取 Peewee → DuckDB 类型映射
+            try:
+                sql_def = self._peewee_field_to_duckdb_sql(field_name, field)
+            except Exception:
+                continue
+            if not sql_def:
+                continue
+            # sql_def 形如 "field_name TYPE [NOT] NULL" — 切出 TYPE 段
+            tokens = sql_def.split()
+            if len(tokens) < 2:
+                continue
+            type_str = tokens[1]  # e.g. "DOUBLE"
+            try:
+                self._duckdb_conn.execute(
+                    f"ALTER TABLE {table_name} ADD COLUMN {field_name} {type_str}"
+                )
+                db_logger.info(
+                    f"{table_name}: 加列 {field_name} {type_str}"
+                )
+            except Exception as exc:
+                db_logger.warning(
+                    f"{table_name}: 加列 {field_name} 失败: {exc}"
+                )
 
     def _peewee_field_to_duckdb_sql(self, field_name: str, field: Field) -> str:
         """

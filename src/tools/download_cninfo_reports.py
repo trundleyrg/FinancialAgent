@@ -287,6 +287,59 @@ class CNInfoReportDownloader:
             print(f"  下载失败: {e}")
             return False
     
+    def query_dividend_announcements(
+        self, stock_code: str, years: list[int],
+    ) -> list[dict]:
+        """查询权益分派公告(巨潮搜 "权益分派" 关键词)。
+
+        Returns:
+            [{'year': int, 'title': str, 'adjunctUrl': str,
+              'announcementTime': int(ms epoch)}]
+        """
+        stock_info = self.get_stock_info_by_code_or_name(stock_code)
+        if not stock_info:
+            return []
+        org_id = stock_info['orgId']
+        plate = stock_info['plate']
+        column = stock_info['column']
+
+        url = "http://www.cninfo.com.cn/new/hisAnnouncement/query"
+        se_date = f"{min(years)}-01-01~{max(years)+1}-12-31"
+        data = {
+            'pageNum': '1', 'pageSize': '50', 'tabName': 'fulltext',
+            'stock': f'{stock_code},{org_id}', 'seDate': se_date,
+            'column': column, 'category': '',
+            'searchkey': '权益分派',
+            'isHLtitle': 'true', 'sortName': 'time', 'sortType': 'desc',
+            'plate': plate, 'secid': '',
+        }
+        try:
+            resp = self.session.post(url, data=data, headers=self.headers, timeout=15)
+            resp.raise_for_status()
+            announcements = resp.json().get('announcements', [])
+        except Exception as exc:
+            logger.error("查询权益分派公告失败: %s", exc)
+            return []
+
+        # 按 year 提取(实施公告在次年 5-7 月 → 归到 announcementTime.year - 1)
+        out = []
+        for ann in announcements:
+            title = ann.get('announcementTitle', '')
+            adj = ann.get('adjunctUrl', '')
+            ts_ms = ann.get('announcementTime', 0)
+            if not adj or not ts_ms:
+                continue
+            from datetime import datetime
+            ts = datetime.utcfromtimestamp(ts_ms / 1000.0)
+            for y in years:
+                if ts.year - 1 == y:
+                    out.append({
+                        'year': y, 'title': title, 'adjunctUrl': adj,
+                        'announcementTime': ts_ms, 'time_str': ts.isoformat(),
+                    })
+                    break
+        return out
+
     def download_reports(self, code_or_name: str, years: list, save_dir: str = None):
         """下载指定股票的年度报告
 
@@ -348,6 +401,259 @@ class CNInfoReportDownloader:
         logger.info(f"\n下载完成: 成功 {success_count}/{len(reports)}")
         print(f"\n下载完成: 成功 {success_count}/{len(reports)}")
         return True
+
+
+def query_dividend_announcements(
+    self, stock_code: str, years: list[int],
+) -> list[dict]:
+    """查询权益分派公告(巨潮搜 "权益分派" 关键词)。
+
+    Returns:
+        [{'year': int, 'title': str, 'adjunctUrl': str,
+          'announcementTime': int(ms epoch)}]
+    """
+    stock_info = self.get_stock_info_by_code_or_name(stock_code)
+    if not stock_info:
+        return []
+    org_id = stock_info['orgId']
+    plate = stock_info['plate']
+    column = stock_info['column']
+
+    url = "http://www.cninfo.com.cn/new/hisAnnouncement/query"
+    se_date = f"{min(years)}-01-01~{max(years)+1}-12-31"
+    data = {
+        'pageNum': '1', 'pageSize': '50', 'tabName': 'fulltext',
+        'stock': f'{stock_code},{org_id}', 'seDate': se_date,
+        'column': column, 'category': '',
+        'searchkey': '权益分派',
+        'isHLtitle': 'true', 'sortName': 'time', 'sortType': 'desc',
+        'plate': plate, 'secid': '',
+    }
+    try:
+        resp = self.session.post(url, data=data, headers=self.headers, timeout=15)
+        resp.raise_for_status()
+        announcements = resp.json().get('announcements', [])
+    except Exception as exc:
+        logger.error("查询权益分派公告失败: %s", exc)
+        return []
+
+    # 按 year 提取(用 announceTime 推断: 通常权益分派实施公告在次年 5-7 月发布,
+    # 所以 2023 年 5 月发布的对应 2022 年度权益分派 → 归到 year-1)
+    out = []
+    for ann in announcements:
+        title = ann.get('announcementTitle', '')
+        adj = ann.get('adjunctUrl', '')
+        ts_ms = ann.get('announcementTime', 0)
+        if not adj or not ts_ms:
+            continue
+        from datetime import datetime
+        ts = datetime.utcfromtimestamp(ts_ms / 1000.0)
+        # 实施公告在次年上半年 → 归属前一年
+        for y in years:
+            if ts.year - 1 == y:
+                out.append({
+                    'year': y, 'title': title, 'adjunctUrl': adj,
+                    'announcementTime': ts_ms, 'time_str': ts.isoformat(),
+                })
+                break
+    return out
+
+
+def _extract_dividend_from_pdf(pdf_path: str) -> dict:
+    """从权益分派实施公告 PDF 提取分红数据。
+
+    解析策略:
+    1. 优先 "本次实际派发现金红利人民币 0.XXXXX 元/股" 或 "每股现金红利人民币 0.XXXXX 元"
+    2. 回退 "除权(息)参考价格=(前收盘价格-0.XXXXX)" 反推
+    3. 提取 "股权登记日总股本为 X,XXX,XXX 股" → total_shares
+    4. 提取 "每 10 股派 X.XX 元" → 优先用这个(财会标准披露)
+
+    Returns:
+        {'cash_per_share': float, 'cash_per_10_shares': float,
+         'total_shares': int | None, 'event_date': str | None}
+    """
+    import re
+    import pdfplumber  # type: ignore
+    text = ""
+    with pdfplumber.open(pdf_path) as pdf:
+        for page in pdf.pages[:3]:  # 只看前 3 页(关键信息在前面)
+            t = page.extract_text() or ""
+            text += t + "\n"
+            if "现金红利" in t and ("股权登记" in t or "总股本" in t):
+                break  # 抓够就停
+
+    out: dict = {
+        'cash_per_share': None, 'cash_per_10_shares': None,
+        'total_shares': None, 'event_date': None,
+    }
+    # 1. "每股实际派发现金红利人民币 0.XXXXX 元"
+    m = re.search(
+        r"每股(?:实际)?派发现金红利(?:人民币)?\s*([0-9]+\.?[0-9]*)\s*元", text
+    )
+    if not m:
+        m = re.search(
+            r"实际派发现金红利\s*人民币\s*([0-9]+\.?[0-9]*)\s*元", text
+        )
+    if not m:
+        # "A股每股现金红利 0.80 元" (600285 2023 用此表述)
+        m = re.search(
+            r"[A-Z]?股每股现金红利\s*([0-9]+\.[0-9]+)\s*元", text
+        )
+    if not m:
+        # 兜底:"每 X 股派 Y 元"
+        m = re.search(
+            r"每\s*([0-9]+)\s*股派[发]?\s*现金红利?\s*([0-9]+\.[0-9]+)\s*元", text
+        )
+        if m:
+            shares, per = int(m.group(1)), float(m.group(2))
+            out['cash_per_share'] = round(per / shares, 4)
+            out['cash_per_10_shares'] = round(out['cash_per_share'] * 10, 4)
+    if m and out['cash_per_share'] is None:
+        out['cash_per_share'] = float(m.group(1))
+        out['cash_per_10_shares'] = round(out['cash_per_share'] * 10, 4)
+
+    # 2. "每 10 股派 X.XX 元"
+    if out['cash_per_10_shares'] is None:
+        m = re.search(
+            r"每\s*10\s*股派?\s*(?:现)?金?红?利?\s*([0-9]+\.[0-9]+)\s*元", text
+        )
+        if m:
+            out['cash_per_10_shares'] = float(m.group(1))
+            out['cash_per_share'] = round(out['cash_per_10_shares'] / 10, 4)
+
+    # 3. "(前收盘价格-0.XXXX)÷..." → 派息额
+    if out['cash_per_share'] is None:
+        m = re.search(
+            r"前收盘价格\s*-\s*([0-9]+\.[0-9]+)\s*[)）]", text
+        )
+        if m:
+            out['cash_per_share'] = float(m.group(1))
+            out['cash_per_10_shares'] = round(out['cash_per_share'] * 10, 4)
+
+    # 4. "总股本为 X,XXX,XXX 股" → total_shares
+    m = re.search(
+        r"总股本为\s*([0-9,]+)\s*股", text
+    )
+    if m:
+        out['total_shares'] = int(m.group(1).replace(',', ''))
+
+    # 5. 股权登记日
+    m = re.search(
+        r"股权登记日[为是:：]?\s*(\d{4})[年\-](\d{1,2})[月\-](\d{1,2})", text
+    )
+    if m:
+        out['event_date'] = f"{m.group(1)}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+    return out
+
+
+def persist_dividend_to_db(
+    stock_code: str,
+    events: list[dict],
+    source: str = "cninfo",
+) -> int:
+    """把分红事件列表持久化到 capital_change_events 表。
+
+    Args:
+        stock_code: 股票代码
+        events: [{'report_year': int, 'cash_per_10_shares': float,
+                  'cash_per_share': float, 'total_shares': int|None,
+                  'event_date': str|None, 'announcement_title': str|None}]
+        source: 数据来源标识
+    Returns:
+        新插入的记录数(同 (stock_code, report_year, event_type) 已存在则跳过)
+    """
+    from src.db.db_connector import get_db
+    db = get_db()
+
+    # 取 share_structure 表里已有的总股本(每年)
+    share_by_year: dict[int, int] = {}
+    rows = db._duckdb_conn.execute(
+        "SELECT report_year, total_shares FROM share_structure "
+        "WHERE stock_code=? AND total_shares IS NOT NULL AND total_shares > 0",
+        [stock_code],
+    ).fetchall()
+    for ry, ts in rows:
+        if ts:
+            share_by_year[ry] = int(ts)
+
+    inserted = 0
+    for ev in events:
+        cps = ev.get('cash_per_share')
+        cps10 = ev.get('cash_per_10_shares')
+        if cps is None and cps10 is not None:
+            cps = round(cps10 / 10.0, 4)
+        if cps is None and cps10 is None:
+            continue
+        ry = ev['report_year']
+        # 优先用 events 自带的 total_shares,否则从 share_structure 取
+        total_shares = ev.get('total_shares') or share_by_year.get(ry)
+        # 是否已存在
+        existing = db._duckdb_conn.execute(
+            "SELECT 1 FROM capital_change_events "
+            "WHERE stock_code=? AND report_year=? AND event_type='cash_dividend'",
+            [stock_code, ry],
+        ).fetchone()
+        if existing:
+            continue
+        # 插入
+        scheme = ev.get('announcement_title', '').split(' ')[0]
+        db._duckdb_conn.execute(
+            "INSERT INTO capital_change_events "
+            "(company_name, stock_code, report_year, report_period, "
+            " event_type, event_date, cash_per_10_shares, total_shares, "
+            " source, scheme_description) "
+            "VALUES (?, ?, ?, 'FY', 'cash_dividend', ?, ?, ?, ?, ?)",
+            ['', stock_code, ry, ev.get('event_date') or '1900-01-01',
+             cps10 or 0.0, total_shares, source, scheme],
+        )
+        inserted += 1
+    return inserted
+
+
+def query_dividend_announcements_and_persist(
+    stock_code: str, years: list[int],
+) -> list[dict]:
+    """一站式:query 巨潮权益分派公告 → 下载 PDF → 解析 → 入库。"""
+    from pathlib import Path
+    import os
+    dl = CNInfoReportDownloader()
+    anns = dl.query_dividend_announcements(stock_code, years)
+    print(f"找到 {len(anns)} 条权益分派公告")
+    pdf_dir = Path("data") / stock_code / "dividend_announcements"
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+
+    events = []
+    for ann in anns:
+        # 用 time_str 推断年份(实施公告发布在次年 5-7 月)
+        from datetime import datetime
+        ts = datetime.fromisoformat(ann['time_str'])
+        # 下载
+        url = f"https://static.cninfo.com.cn/{ann['adjunctUrl']}"
+        local = pdf_dir / Path(ann['adjunctUrl']).name
+        try:
+            r = dl.session.get(url, headers={
+                'User-Agent': 'Mozilla/5.0',
+                'Referer': 'http://www.cninfo.com.cn/',
+            }, timeout=60)
+            r.raise_for_status()
+            local.write_bytes(r.content)
+        except Exception as exc:
+            print(f"下载 {ann['title']} 失败: {exc}")
+            continue
+        # 解析
+        info = _extract_dividend_from_pdf(str(local))
+        info['report_year'] = ann['year']
+        info['announcement_title'] = ann['title']
+        events.append(info)
+        print(
+            f"  {ann['year']} {ann['title'][:40]}... → "
+            f"每股 {info['cash_per_share']}元 (10股 {info['cash_per_10_shares']}元)"
+            f" 总股本 {info['total_shares']}"
+        )
+    # 入库
+    n = persist_dividend_to_db(stock_code, events, source="cninfo")
+    print(f"入库: {n} 条新事件")
+    return events
 
 
 def main():
