@@ -1568,6 +1568,103 @@ def get_db(database_type: str = None, database_url: str = None) -> DatabaseConne
     return _db_connector
 
 
+def _fill_share_structure_totals_fallback(
+    model_data: Dict[str, Any],
+    table_data: List[List[str]],
+) -> None:
+    """ShareStructure 兜底:显式"股份总数"行缺失时,从子项求和推导。
+
+    A 股年报"股份变动情况表"标准布局:
+      第一组列:本次变动前(数量 + 比例)
+      第二组列:本次变动增减(发行新股/送股/转股/其他/小计)
+      第三组列:本次变动后(数量 + 比例)
+      行序:一、有限售条件股份 / 二、无限售条件流通股份 / 三、股份总数
+
+    很多年报(尤其早期 / 股本较稳定年份)只列"一、有限售"+ "二、无限售"
+    两段,没有显式的"三、股份总数"行。``_parse_table_data_to_model_data``
+    的 help_text 匹配规则找不到 total_shares 时,会全部留 NULL。这里复用
+    table_data 二次回填:
+      - restricted_shares   = "一、有限售条件股份" 行的「本次变动后」数量
+      - unrestricted_shares = "二、无限售条件流通股份" 行的「本次变动后」数量
+      - total_shares = 上两者之和
+    若三者中任一字段已存在(无论是 parser 直接匹配还是上面步骤回填)则跳过,
+    避免覆盖更可信的源。
+    """
+    def _parse_num(s: str) -> float | None:
+        if s is None:
+            return None
+        s2 = str(s).strip().replace(",", "").replace(" ", "").replace(chr(10), "").replace(chr(13), "")
+        if not s2 or s2 in ("-", "－", "—", "0.00"):
+            return 0.0
+        try:
+            return float(s2)
+        except (ValueError, TypeError):
+            return None
+
+    # 「本次变动后」列的 index:
+    #   典型 10 列表布局: col 0 项目名, col 1-2 本次变动前(数量/比例),
+    #   col 3-7 本次变动增减 5 子列, col 8-9 本次变动后(数量/比例)。
+    #   索引随表头略有差异。本函数按最常见 10 列布局取 col 8 取数;
+    #   表头数不同的回退到「最后非空数字列」。
+    def _last_numeric_value(row: List[str], hint_col: int = 8) -> float | None:
+        if not row:
+            return None
+        if len(row) > hint_col:
+            v = _parse_num(row[hint_col])
+            if v is not None:
+                return v
+        # 回退:行尾非空数字
+        for cell in reversed(row):
+            v = _parse_num(cell)
+            if v is not None and v > 0:
+                return v
+        return None
+
+    def _find_subtotal_row(leading_token: str) -> List[str] | None:
+        """找「一、有限售条件股份」/「二、无限售条件流通股份」这类行。
+
+        关键字匹配放宽到"一、有限售"或"一、有限\n售条件股"等带换行的写法。
+        """
+        for row in table_data:
+            if not row:
+                continue
+            label = str(row[0] or "").replace("\n", "").replace(" ", "")
+            if leading_token in label:
+                # 避免误命中"其他内资"等下属行,要求以"一、"开头
+                if (
+                    label.startswith("一、有限售")
+                    or label.startswith("二、无限售")
+                ):
+                    return row
+        return None
+
+    restricted_row = _find_subtotal_row("一、有限售")
+    unrestricted_row = _find_subtotal_row("二、无限售")
+
+    restricted_val: float | None = None
+    if restricted_row and model_data.get("restricted_shares") is None:
+        v = _last_numeric_value(restricted_row)
+        if v is not None and v > 0:
+            restricted_val = v
+            model_data["restricted_shares"] = v
+
+    unrestricted_val: float | None = None
+    if unrestricted_row and model_data.get("unrestricted_shares") is None:
+        v = _last_numeric_value(unrestricted_row)
+        if v is not None and v > 0:
+            unrestricted_val = v
+            model_data["unrestricted_shares"] = v
+
+    # 兜底求和:仅当 parser 直接匹配失败且两个子项都有可靠数值时才写
+    if (
+        model_data.get("total_shares") is None
+        and restricted_val is not None
+        and unrestricted_val is not None
+    ):
+        total = restricted_val + unrestricted_val
+        model_data["total_shares"] = total
+
+
 def save_tables_to_db(main_tables: Dict[str, Any], company_name: str, pdf_path:str,
                       company_short_name: str, company_code: str, report_year: int,
                       report_period: str, stock_code: str = "", db_connector: DatabaseConnector = None) -> Dict[str, int]:
@@ -1652,6 +1749,17 @@ def save_tables_to_db(main_tables: Dict[str, Any], company_name: str, pdf_path:s
                 model_class,
                 unit_str=table_obj.unit or "",
             )
+
+            # ShareStructure 兜底:当 PDF 章节里没有显式"三、股份总数"行时,
+            # 用"一、有限售条件股份"+"二、无限售条件流通股份"的「本次变动后」
+            # 数量求和,这是 A 股年报标准的总股本兜底(适用于任何股票)。
+            # 先于 empty check 调用 —— 因为"股份变动情况表"常被 chapter_extractor
+            # 截断(只保留前几行表头 + 一行数据),正则 matcher 容易全部失配空字典,
+            # 走兜底仍能从子项求和得到 total_shares。
+            if model_class is ShareStructure:
+                _fill_share_structure_totals_fallback(
+                    model_data, table_obj.table_data,
+                )
 
             if not model_data:
                 db_logger.warning(f"表格 {table_name} 未能解析出有效数据")
