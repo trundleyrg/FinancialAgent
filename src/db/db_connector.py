@@ -25,7 +25,7 @@ from src.db.models import (
     ConsolidatedIncomeStatement, ParentCompanyIncomeStatement,
     ConsolidatedCashFlowStatement, ParentCompanyCashFlowStatement,
     ShareStructure, CapitalChangeEvent, SkillAnalysisResult,
-    StockMarketSnapshot,
+    StockMarketSnapshot, StockDailyPrice,
 )
 from src.utils.logger import db_logger
 
@@ -380,6 +380,7 @@ class DatabaseConnector:
                 ConsolidatedIncomeStatement, ParentCompanyIncomeStatement,
                 ConsolidatedCashFlowStatement, ParentCompanyCashFlowStatement,
                 ShareStructure, CapitalChangeEvent,
+                StockDailyPrice,
             ]
             self.engine.create_tables(tables, safe=True)
             db_logger.info("PostgreSQL表格创建完成")
@@ -411,6 +412,7 @@ class DatabaseConnector:
             ConsolidatedCashFlowStatement, ParentCompanyCashFlowStatement,
             ShareStructure, CapitalChangeEvent,
             SkillAnalysisResult, StockMarketSnapshot,
+            StockDailyPrice,
         ]
 
         def _wrap_save(model_class):
@@ -455,6 +457,7 @@ class DatabaseConnector:
             ConsolidatedCashFlowStatement, ParentCompanyCashFlowStatement,
             ShareStructure, CapitalChangeEvent,
             SkillAnalysisResult, StockMarketSnapshot,
+            StockDailyPrice,
         ]
         
         for table in tables:

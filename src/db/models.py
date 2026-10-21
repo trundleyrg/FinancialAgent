@@ -820,6 +820,45 @@ class SkillAnalysisResult(Model):
         )
 
 
+class StockDailyPrice(Model):
+    """个股日线价格表(OHLCV)。
+
+    设计目的：akshare 行情接口频繁断连(雪球/东财/百度),把一次成功
+    抓到的全量历史日线数据持久化到本地,供:
+      - dividend skill 取年度/季度价区间
+      - 估值倍数分布(PE 历史分位、PB 历史分位)
+      - 图表层面的收盘价 / 换手率曲线渲染
+
+    字段极简版:开盘/最高/最低/收盘/成交量五列,够 dividend_skill
+    与估值分位计算;再加 source / created_at / updated_at。
+    精度:trade_date 是 DATE 类型,准确到年月日;akshare 日线频率
+    是「每个交易日」一个数据点,所以一行 = 一个交易日。
+    写入策略:fetcher 走 akshare 的 stock_zh_a_hist(全 A 上市以来),
+    UNIQUE (stock_code, trade_date) 冲突时 UPSERT,实现增量刷新。
+    """
+    id = AutoField(primary_key=True)
+    stock_code = CharField(max_length=20, null=False, index=True)
+    trade_date = DateField(null=False, index=True)
+
+    open_price = FloatField(null=True, help_text="开盘价(元)")
+    high_price = FloatField(null=True, help_text="最高价(元)")
+    low_price = FloatField(null=True, help_text="最低价(元)")
+    close_price = FloatField(null=True, help_text="收盘价(元)")
+    volume = FloatField(null=True, help_text="成交量(手)")
+
+    source = CharField(max_length=32, null=False)
+    created_at = DateTimeField(default=datetime.now)
+    updated_at = DateTimeField(default=datetime.now)
+
+    class Meta:
+        database = db
+        table_name = 'stock_daily_price'
+        indexes = (
+            (('stock_code', 'trade_date'), True),  # UNIQUE
+            (('stock_code', 'created_at'), False),
+        )
+
+
 class StockMarketSnapshot(Model):
     """行情估值快照表。
 
