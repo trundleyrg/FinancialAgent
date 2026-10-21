@@ -625,14 +625,41 @@ class PDFChapterExtractor:
                 tables = []
             if len(tables) > 1:
                 # 当前页中找到两个以上的表格，判断表头前的文本中是否出现相关文本
+                # 同义词(如"普通股股份变动情况")也要算匹配,允许早期年报用语变体。
+                variants = self._section_title_variants(section_title)
                 find_table = False
                 for table in tables:
-                    if section_title in table.header_text:
+                    if any(v in (table.header_text or "") for v in variants):
                         find_table = True
                         main_tables[section_title] = table
                         break
                 if not find_table:
-                    chapter_logger.error(f"未找到{section_title}")
+                    chapter_logger.warning(
+                        f"primary 多表均不匹配 {section_title},降级 fallback...",
+                    )
+                    # 降级:走进 fallback 路径继续尝试(extract_main_tables 整体循环
+                    # 走完后这一项仍是初始占位值,这里主动重赋值,避免下一轮)
+                    fallback_tables = self._extract_main_table_by_text_fallback(section_title)
+                    if fallback_tables:
+                        picked = next(
+                            (t for t in fallback_tables
+                             if any(v in (t.header_text or "") for v in variants)),
+                            None,
+                        )
+                        if picked is None:
+                            picked = fallback_tables[0]
+                            chapter_logger.warning(
+                                f"fallback 多表也不匹配 {section_title};"
+                                f"降级用首张, header={picked.header_text!r}",
+                            )
+                        main_tables[section_title] = picked
+                        chapter_logger.info(
+                            f"通过文本扫描 fallback 提取 {section_title}: {picked.page_start_num+1}-"
+                            + str(picked.page_end_num+1)
+                        )
+                    else:
+                        main_tables[section_title] = None
+                        chapter_logger.error(f"未找到{section_title}")
             elif len(tables) < 1:
                 # Fallback:全文扫描找含 section_title 的页
                 fallback_tables = self._extract_main_table_by_text_fallback(section_title)
@@ -643,9 +670,11 @@ class PDFChapterExtractor:
                     # 余尾与本报表头部落在同一 PDF 页),PyMuPDF 会把两段都识别为
                     # 独立表格,fallback 列表里第一项往往仍指向前一报表(BS 残余)。
                     # 与上面 len(tables) > 1 分支的多表选择规则保持一致。
+                    # 同时接受 section_title 的同义词(如"普通股股份变动情况")。
+                    variants = self._section_title_variants(section_title)
                     picked = next(
                         (t for t in fallback_tables
-                         if section_title in (t.header_text or "")),
+                         if any(v in (t.header_text or "") for v in variants)),
                         None,
                     )
                     if picked is None:
@@ -667,6 +696,24 @@ class PDFChapterExtractor:
                 main_tables[section_title] = tables[0]
         return main_tables
 
+    # 章节标题同义词:不同年份年报的章节命名不一致,
+    # 例如 2020 早年「普通股股份变动情况」、后期 2021+ 用「股份变动情况」;
+    # 这里把它们映射到同一个 fallback 章节上,确保不论 PDF 用语如何都
+    # 命中同一个解析路径。通用,适用于任何股票。
+    _SECTION_TITLE_SYNONYMS: Dict[str, List[str]] = {
+        # 同义词的顺序很重要:从最具体到最宽泛。fallback 按 variants 列表顺序
+        # 选择首个能匹配的行,放前面的更具体语义(如"股份变动情况表")优先,
+        # 避免被宽泛词(如"股本变动")意外命中其他章节标题。
+        "股份变动情况": [
+            "普通股股份变动情况表", "股份变动情况表",
+            "普通股股份变动情况", "股份变动情况",
+        ],
+    }
+
+    def _section_title_variants(self, section_title: str) -> List[str]:
+        """返回 section_title 及其同义词。优先精确,失败时尝试变体。"""
+        return self._SECTION_TITLE_SYNONYMS.get(section_title, [section_title])
+
     def _extract_main_table_by_text_fallback(
         self, section_title: str,
     ) -> List[TableWithHeader]:
@@ -674,17 +721,24 @@ class PDFChapterExtractor:
         但页面正文第一行就是该标题。用全文文本扫描定位起止页。
 
         启发式:
-        - start_page = 第一个含 section_title 行的页
+        - start_page = 第一个含 section_title(或其同义词,如"普通股股份变动情况"
+          是 "股份变动情况" 的早年变体)整行精确匹配的页
         - end_page = 下一个含同等"X母公司/合并/审计意见"等标题的页
           或下一个 L1/L2 大章节
         - 然后 extract_tables_in_section(start, end)
         """
         import fitz as _fitz
+        variants = self._section_title_variants(section_title)
+        # 章节标题往往出现在页面前 10 行(标题区),不要在正文 / 表格 cell 里命中
+        # (否则"对…合并资产负债表的影响"这种审计说明文本也会误匹)。整行精确
+        # 匹配容易漏"1、 合并资产负债表"这种带前缀的写法,因此采用 substring
+        # 但只看页面顶部几行。
+        HEADER_LINES_TO_CHECK = 10
         start_page = None
         for page_idx in range(len(self.doc)):
             text = self.doc[page_idx].get_text()
-            lines = [l.strip() for l in text.split('\n') if l.strip()]
-            if section_title in lines:
+            lines = [l.strip() for l in text.split('\n') if l.strip()][:HEADER_LINES_TO_CHECK]
+            if any(any(v in l for v in variants) for l in lines):
                 start_page = page_idx
                 break
         if start_page is None:
