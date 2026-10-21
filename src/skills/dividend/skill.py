@@ -15,6 +15,7 @@ from src.skills.dividend.tools import (
     build_dividend_markdown,
     compute_dividend_stability_years,
     compute_debt_breakdown,
+    compute_target_returns_table,
     extract_dividend_info,
     fetch_total_shares_by_year,
     filter_financial_data,
@@ -79,6 +80,46 @@ import os
 DEFAULT_TREND_YEARS = int(os.environ.get("DIVIDEND_TREND_YEARS", "5"))
 
 DESCRIPTION = read_skill_description(SKILL_DIR / "SKILL.md")
+
+
+def _maybe_compute_target_returns(
+    stock_code: Optional[str],
+    report_year: int,
+    report_period: Optional[str],
+    cur_total_shares: Optional[float],
+    current_price: Optional[float],
+) -> Optional[List[Dict[str, Any]]]:
+    """计算「目标股息率反推市值」表的数据 rows。仅在关键字段齐备时返回。
+
+    用 ``compute_target_returns_table`` 查 DB 现存字段 —
+    per_share_dividend(capital_change_events)、total_shares(share_structure)、
+    current_price(stock_daily_price,展示用)。
+
+    返回 None 时 build_dividend_markdown 不渲染该 section,
+    避免半残数据误导读者。
+    """
+    if not stock_code:
+        return None
+    try:
+        res = compute_target_returns_table(
+            stock_code=stock_code,
+            report_year=report_year,
+            period=report_period or "FY",
+            target_yields=[3.0, 5.0],
+        )
+    except Exception as exc:
+        logger.warning("compute_target_returns_table 异常 %s: %s", stock_code, exc)
+        return None
+    # 必要字段任一缺失 → 不渲染(避免错误数据)
+    if "total_shares" in res["missing_fields"]:
+        return None
+    if "per_share_dividend" in res["missing_fields"]:
+        return None
+    if not res["rows"]:
+        return None
+    # 当前股价可用时,skill 端把其值传给 markdown 用于「当前价格」基线行;
+    # 这里不修改 res,仅辅助 caller 决定是否传入 target_returns_current_price
+    return res["rows"]
 
 
 def run(
@@ -492,6 +533,14 @@ def run(
                     # 独立的负债结构 section(图 + 表,与分红率表格分开展示)
                     debt_chart_path=debt_chart_rel,
                     debt_table=debt_df_for_md,
+                    # 七、目标股息率反推市值(用户提交历史代码变更阶段新增)
+                    # 用 compute_target_returns_table 查 DB 实算,缺关键字段时
+                    # 整表跳过(在 build_dividend_markdown 内做 None-check)。
+                    target_returns_table=_maybe_compute_target_returns(
+                        stock_code, report_year, report_period,
+                        cur_total_shares, current_price,
+                    ),
+                    target_returns_current_price=current_price,
                 )
                 md_path.write_text(md_content, encoding="utf-8")
                 markdown_path = str(md_path)

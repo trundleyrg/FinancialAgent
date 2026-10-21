@@ -100,7 +100,7 @@ def _sample_table() -> pd.DataFrame:
 
 
 def test_build_dividend_markdown_basic_structure():
-    """完整 result + chart + table → 七段、顺序正确。"""
+    """完整 result + chart + table → 六段(无投资评级,行为变更)、顺序正确。"""
     md = build_dividend_markdown(
         _FULL_RESULT,
         chart_path="charts/dividend_trend_2024.png",
@@ -120,18 +120,21 @@ def test_build_dividend_markdown_basic_structure():
     assert "## 二、关键指标" in md
     assert "4.50" in md  # dividend_yield
     assert "60.00" in md  # payout_ratio
-    # 评级 + 理由
-    assert "**投资评级: BUY**" in md
-    assert "公司分红稳定,现金流充裕" in md
-    # 七段顺序:一 < 二 < 三 < 四 < 五 < 六 < 七
+    # 评级段已删除(用户提交历史代码变更阶段要求)
+    assert "**投资评级" not in md, "报告中不应再有「投资评级」段"
+    assert "公司分红稳定,现金流充裕" not in md, (
+        "reasoning 也不再出现在报告中(评级段是 reasoning 唯一渲染位置)"
+    )
+    # 六段顺序:一 < 二 < 三 < 四 < 五 < 六
     pos_one = md.index("## 一、")
     pos_two = md.index("## 二、")
     pos_three = md.index("## 三、")
     pos_four = md.index("## 四、")
     pos_five = md.index("## 五、")
     pos_six = md.index("## 六、")
-    pos_seven = md.index("## 七、")
-    assert pos_one < pos_two < pos_three < pos_four < pos_five < pos_six < pos_seven
+    assert pos_one < pos_two < pos_three < pos_four < pos_five < pos_six
+    # 不应有「七、」段
+    assert "## 七、" not in md, "不应再有七、投资评级与理由 段"
 
 
 def test_build_dividend_markdown_chart_above_table():
@@ -154,14 +157,14 @@ def test_build_dividend_markdown_chart_above_table():
 
 
 def test_build_dividend_markdown_without_chart():
-    """chart_path=None → 跳过图,但仍渲染表 + LLM 结论。"""
+    """chart_path=None → 跳过图,但仍渲染表。"""
     md = build_dividend_markdown(
         _FULL_RESULT, chart_path=None, table=_sample_table(),
         company_name="X", stock_code="000001", report_year=2024,
     )
     assert "![X 红利股关键指标趋势]" not in md
     assert "营业收入(亿元)" in md
-    assert "**投资评级: BUY**" in md
+    # 评级段已删除,所以这里不再断言;保留表渲染验证
 
 
 def test_build_dividend_markdown_without_table():
@@ -173,8 +176,6 @@ def test_build_dividend_markdown_without_table():
     assert "(charts/dividend_trend_2024.png)" in md
     # 仅在 chart 和 table 都缺失时才显示「数据缺失」
     assert "趋势图/表数据缺失" not in md
-    # LLM 结论段还在
-    assert "**投资评级: BUY**" in md
 
 
 def test_build_dividend_markdown_both_missing_shows_placeholder():
@@ -201,19 +202,27 @@ def test_build_dividend_markdown_missing_nested_fields():
     assert "毛利率(%) | N/A" in md
     assert "资产负债率(%) | N/A" in md
     assert "市盈率(倍) | N/A" in md
-    assert "**投资评级: HOLD**" in md
+    # 评级段已删除,无需断言;子表 N/A 占位仍然走 fallback
 
 
-def test_build_dividend_markdown_reasoning_preserves_plain_text():
-    """reasoning 走普通段落(非表格 cell),`|` 不需要转义。"""
+def test_build_dividend_markdown_reasoning_not_in_md():
+    """reasoning 不再渲染到 markdown 中(评级段删除后,reasoning 没有
+    渲染位置)。
+
+    评级与理由现在只在 skill_analysis_results 表中持久化;markdown 报告
+    只保留事实性数字 + 解释,不渲染 LLM 评级与推理文本。
+    """
     tricky = dict(_FULL_RESULT)
     tricky["reasoning"] = "评级高|低估|成长稳"
     md = build_dividend_markdown(
         tricky, chart_path=None, table=None,
         company_name="Z", stock_code="000003", report_year=2024,
     )
-    # 段落里 `|` 是合法的 markdown 字符,原样保留
-    assert "评级高|低估|成长稳" in md
+    # reasoning 应不再出现
+    assert "评级高|低估|成长稳" not in md, (
+        "评级与理由已删除,reasoning 不应再渲染到 markdown"
+    )
+    assert "评级高" not in md
 
 
 def test_build_dividend_markdown_escapes_pipe_in_risk_factors():
@@ -976,9 +985,9 @@ def test_skill_writes_dividend_markdown_report(tmp_path, monkeypatch):
     assert table_header is not None
     assert chart_pos < table_header.start(), "图必须在上、表格在下"
 
-    # 5. LLM 结论段存在
-    assert "**投资评级: BUY**" in content
-    assert "分红稳" in content
+    # 5. 报告里不应再有评级段(用户提交历史代码变更阶段要求删)
+    assert "**投资评级" not in content
+    assert "分红稳" not in content, "reasoning 也不再出现在报告中"
 
     # 6. events 路径:skill 把 payout_source 写进 input_context.markdown 上下文
     #    注意 save_skill_result 的 input_context 已被 captured_ctx 捕获
@@ -2043,3 +2052,177 @@ def test_build_dividend_markdown_section_two_structure_after_changes():
     assert pos_table_data_note < pos_metric_explanation, (
         "数据范围备注应在指标解释段之前"
     )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 末段:目标股息率 → 市值反推表(用户提交历史代码变更阶段新增)
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def test_build_dividend_markdown_target_returns_section_absent_by_default():
+    """target_returns_table 不传 → 报告里不应有该 section(向后兼容)。"""
+    md = build_dividend_markdown(
+        _FULL_RESULT,
+        chart_path=None, table=None,
+        company_name="X", stock_code="000001", report_year=2024,
+    )
+    assert "目标股息率" not in md and "反推" not in md, (
+        "target_returns_table 不传时不应出现反推表 section"
+    )
+
+
+def test_build_dividend_markdown_target_returns_section_when_provided():
+    """target_returns_table 非空 → 报告末尾加「目标股息率 → 市值反推」表。
+
+    三列:股息率 / 对应市值 / 对应价格
+    """
+    target_rows = [
+        {"dividend_yield_pct": 3.0, "implied_market_cap_yi": 17.01, "implied_price": 30.00},
+        {"dividend_yield_pct": 5.0, "implied_market_cap_yi": 10.21, "implied_price": 18.00},
+    ]
+    md = build_dividend_markdown(
+        _FULL_RESULT,
+        chart_path=None, table=None,
+        company_name="测试", stock_code="000001", report_year=2024,
+        target_returns_table=target_rows,
+    )
+    # 段标题
+    assert "目标股息率" in md, "应有「目标股息率」段"
+    # 三列表头(列名含单位,避免误读)
+    assert "| 股息率 | 对应市值(亿元) | 对应价格(元/股) |" in md, (
+        "三列表头应为「股息率 | 对应市值(亿元) | 对应价格(元/股)」"
+    )
+    # 数据行
+    assert "| 3.00 |" in md
+    assert "| 5.00 |" in md
+    assert "17.01" in md
+    assert "10.21" in md
+    assert "30.00" in md
+    assert "18.00" in md
+
+
+def test_build_dividend_markdown_target_returns_section_renders_unit():
+    """市值单位(亿元)应在列名里显式标,避免被误读为「元」或「万元」。"""
+    target_rows = [
+        {"dividend_yield_pct": 3.0, "implied_market_cap_yi": 17.01, "implied_price": 30.00},
+        {"dividend_yield_pct": 5.0, "implied_market_cap_yi": 10.21, "implied_price": 18.00},
+    ]
+    md = build_dividend_markdown(
+        _FULL_RESULT,
+        chart_path=None, table=None,
+        company_name="测试", stock_code="000001", report_year=2024,
+        target_returns_table=target_rows,
+    )
+    # 列名要标注市值单位
+    assert "市值(亿元)" in md or "市值（亿元）" in md, (
+        "市值列应标注单位(亿元),避免与股价元混淆"
+    )
+
+
+def test_build_dividend_markdown_target_returns_section_position():
+    """目标股息率反推表应在报告末尾(风险因素六、之后)。"""
+    target_rows = [
+        {"dividend_yield_pct": 3.0, "implied_market_cap_yi": 17.01, "implied_price": 30.00},
+    ]
+    md = build_dividend_markdown(
+        _FULL_RESULT,
+        chart_path=None, table=None,
+        company_name="测试", stock_code="000001", report_year=2024,
+        target_returns_table=target_rows,
+    )
+    pos_risk = md.index("## 六、风险因素")
+    pos_target = md.index("目标股息率")
+    assert pos_target > pos_risk, "目标股息率表应在「六、风险因素」之后(在报告末尾)"
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# compute_target_returns_table 工具函数
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def test_compute_target_returns_table_uses_db_fields_only():
+    """compute_target_returns_table 只查 DB 现存字段,不调用任何外网接口。
+
+    输入三件套:
+      - share_structure.total_shares(已有 carry-forward)
+      - capital_change_events.cash_per_10_shares(年报派息)
+      - stock_daily_price.close_price(展示用,缺失不影响反推)
+
+    验证:600285 2024 反推出的 3% / 5% 市值,与已知公式 (per_share * 100/y) × total_shares
+    对得上。
+    """
+    from src.skills.dividend.tools import compute_target_returns_table
+
+    res = compute_target_returns_table(
+        stock_code="600285", report_year=2024, period="FY",
+        target_yields=[3.0, 5.0],
+    )
+    # 必备 2 项不能缺失(否则 missing_fields 列出,row 为空)
+    assert "total_shares" not in res["missing_fields"]
+    assert "per_share_dividend" not in res["missing_fields"]
+    # 600285 2024 应有这些数
+    assert res["total_shares"] == 567143992.0
+    assert res["per_share_dividend"] == 0.9  # 9/10
+    # close_price(展示用)— 6,207 行已落库,应有
+    assert res["current_price"] is not None
+    assert res["current_price"] > 0
+
+    # row 数 = target_yields 个数
+    assert len(res["rows"]) == 2
+    # 3% 行验证公式
+    row3 = next(r for r in res["rows"] if r["dividend_yield_pct"] == 3.0)
+    # implied_price = 0.9 * 100 / 3 = 30.0
+    assert abs(row3["implied_price"] - 30.0) < 0.01
+    # implied_market_cap = 567143992 × 30 / 1e8 = 170.14 亿
+    assert abs(row3["implied_market_cap_yi"] - 170.14) < 0.1, (
+        f"3% 对应市值应≈170.14 亿,实际 {row3['implied_market_cap_yi']}"
+    )
+    # 5% 行
+    row5 = next(r for r in res["rows"] if r["dividend_yield_pct"] == 5.0)
+    assert abs(row5["implied_price"] - 18.0) < 0.01
+    assert abs(row5["implied_market_cap_yi"] - 102.09) < 0.1
+
+
+def test_compute_target_returns_table_missing_fields_report():
+    """数据缺失时 missing_fields 列出缺哪些,rows 为空,调用方据此决定渲染策略。
+
+    模拟 share_structure 缺失的场景(难以简单模拟,改测 per_share_dividend
+    缺失:600285 2100 年还没数据)。
+    """
+    from src.skills.dividend.tools import compute_target_returns_table
+
+    res = compute_target_returns_table(
+        stock_code="600285", report_year=2100, period="FY",
+        target_yields=[3.0, 5.0],
+    )
+    # 2100 年:share_structure 应为空(没数据),events 应为空
+    assert res["total_shares"] is None
+    assert res["per_share_dividend"] is None
+    assert "total_shares" in res["missing_fields"]
+    assert "per_share_dividend" in res["missing_fields"]
+    # 缺核心字段时 rows 为空
+    assert res["rows"] == [], (
+        "缺 per_share 或 total_shares 时不应产出反推行(避免错误数据)"
+    )
+
+
+def test_compute_target_returns_table_default_targets():
+    """默认 target_yields 是 [3.0, 5.0]。"""
+    from src.skills.dividend.tools import compute_target_returns_table
+
+    res = compute_target_returns_table("600285", 2024, "FY")
+    yields = sorted(r["dividend_yield_pct"] for r in res["rows"])
+    assert yields == [3.0, 5.0]
+
+
+def test_compute_target_returns_table_skips_invalid_yield():
+    """target_yields 中 y <= 0 跳过(避免除零)。"""
+    from src.skills.dividend.tools import compute_target_returns_table
+
+    res = compute_target_returns_table(
+        "600285", 2024, "FY", target_yields=[3.0, 0, -1, 5.0],
+    )
+    # 只产 2 行(3% 和 5%)
+    assert len(res["rows"]) == 2
+    yields = [r["dividend_yield_pct"] for r in res["rows"]]
+    assert yields == [3.0, 5.0]
