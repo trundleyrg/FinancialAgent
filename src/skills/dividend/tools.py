@@ -974,6 +974,7 @@ def build_dividend_markdown(
     interest_bearing_debt_override: Optional[float] = None,
     debt_chart_path: Optional[str] = None,
     debt_table: Optional[pd.DataFrame] = None,
+    trend_years: Optional[int] = None,
 ) -> str:
     """把 dividend skill 的 LLM 结果 + 趋势图 + 趋势表渲染成自包含 markdown 报告。
 
@@ -1073,13 +1074,40 @@ def build_dividend_markdown(
         ("自由现金流对分红覆盖率(倍)", result.get("cash_flow_coverage")),
         ("有息负债(亿元)", interest_bearing_value),
         ("有息负债占比(%)", interest_debt_ratio_value),
-        ("财务健康度评分(0-100)", result.get("financial_health_score")),
     ]
     key_lines = ["## 二、关键指标", ""]
     key_lines.append("| 指标 | 数值 |")
     key_lines.append("|------|------|")
     for name, value in key_rows:
         key_lines.append(f"| {name} | {_md_format_value(value)} |")
+
+    # 数据范围 / 口径说明(写在表前一行,提示读者「连续分红年限」
+    # 等长期口径仅基于近 N 年数据,实际可能更久)。
+    if trend_years:
+        key_lines.append("")
+        key_lines.append(
+            f"> **数据范围**:本报告基于近 **{trend_years} 年** 报告期数据计算。"
+            "「连续分红年限」等长期口径指标在该窗口内统计,"
+            "真实年限可能长于此(取决于历史数据回溯深度)。"
+        )
+
+    # 关键指标「指标解释」段(给读者每个指标的口径),便于无需查 SKILL.md
+    # 也能复核数字。
+    key_lines += ["", "### 指标解释", ""]
+    key_lines.extend([
+        "- **股息率**(%) = 每股分红 ÷ 当前股价 × 100。股价取自 "
+        "`stock_daily_price` 最近一日收盘价(前复权)。",
+        "- **分红率**(%) = 现金分红总额 ÷ 归母净利润 × 100。"
+        "口径见一、趋势表下方说明。",
+        "- **连续分红年限**(年) = `trend_years` 窗口内连续有 "
+        "`cash_dividend` 事件的年数;实际年限未做早期回溯。",
+        "- **自由现金流对分红覆盖率**(倍) = 自由现金流 ÷ 现金分红总额。"
+        "覆盖率 ≥ 1 表示分红由经营现金流支撑。",
+        "- **有息负债**(亿元) = 短期借款 + 长期借款 + 应付债券 "
+        "+ 一年内到期非流动负债 + 租赁负债 + 应付利息。",
+        "- **有息负债占比**(%) = 有息负债 ÷ 总负债 × 100。",
+    ])
+
     key_lines += ["", "---", ""]
 
     # 4. 三-五、子能力指标

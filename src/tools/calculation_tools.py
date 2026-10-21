@@ -62,7 +62,16 @@ def calculate_profitability(
             operating_costs = _get_value(income_statement, "operating_costs") or _get_value(income_statement, "operating_cost")
             gross_profit = revenue - operating_costs
 
+        # 净利润回退链:
+        # 五、净利润(合并) → 归属于母公司股东的净利润 → 归母 + 少数股东损益求和。
+        # 单独使用「归母+少数」求和是最后的兜底 —— 用于解析时未匹配到
+        # 「五、净利润」整行,导致字段全 NULL 的场景(如 600285 2024 income 表)。
         net_profit = _get_value(income_statement, "net_profit")
+        if net_profit == 0.0:
+            attr_parent = _get_value(income_statement, "net_profit_attributable_to_parent")
+            attr_minority = _get_value(income_statement, "minority_interest_net_profit")
+            if attr_parent != 0.0:
+                net_profit = attr_parent + attr_minority if attr_minority else attr_parent
 
         # ROE / ROA 数据优先从资产负债表获取
         bs = balance_sheet or {}

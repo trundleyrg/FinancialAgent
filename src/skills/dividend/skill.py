@@ -476,6 +476,9 @@ def run(
                     stock_code=stock_code,
                     report_year=report_year,
                     report_period=report_period,
+                    # 报告期窗口长度,用于在 markdown 备注里告诉读者
+                    # 「连续分红年限」等长期口径的统计可能因窗口短而被低估。
+                    trend_years=years_window,
                     # skill 自己算的 payout_ratio(events 口径)覆盖 LLM 输出,
                     # 避免 LLM 估算与 trend chart 同年点不一致。
                     payout_ratio_override=dividend_info.get("payout_ratio"),
