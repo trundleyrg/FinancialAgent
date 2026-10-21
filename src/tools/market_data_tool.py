@@ -466,6 +466,32 @@ def get_stock_market_data(stock_code: str) -> Dict[str, Any]:
     except Exception as exc:
         logger.debug("加载 DB 行情快照失败 %s: %s", code, exc)
 
+    # 1.5) DB 日线(stock_daily_price)最新一行:
+    # - stock_market_snapshot 不一定有 close_price(接口部分字段可能 NULL)
+    #   时,从更稳的 stock_daily_price 取最新 close 作为 current_price 兜底
+    # - 适用于 dividend_skill 的 current_price → dividend_yield 必算字段
+    try:
+        from src.tools.stock_daily_price_fetcher import get_latest_close_price
+        db_close = get_latest_close_price(code)
+        if db_close is not None:
+            # 只在没有 current_price 时补上,优先保证估值来源字段不被覆盖
+            if not any(
+                isinstance(r, dict) and r.get("close") is not None
+                for r in fallback["pe_pb_history"]
+            ):
+                from datetime import date as _date
+                fallback["pe_pb_history"].append({
+                    "date": _date.today().isoformat(),
+                    "close": db_close,
+                    "pb": None,
+                    "pe": None,
+                    "market_cap": None,
+                    "source": "db:stock_daily_price",
+                })
+                fallback["basic_info"]["_daily_price_source"] = "stock_daily_price"
+    except Exception as exc:
+        logger.debug("加载 DB 日线 close_price 失败 %s: %s", code, exc)
+
     # 2) akshare 实时（失败不抛，仅记 error）
     try:
         basic = get_stock_basic_info(stock_code)
