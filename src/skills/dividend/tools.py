@@ -730,6 +730,7 @@ def extract_dividend_info(
         "cash_dividend_paid": cash_dividend_paid,
         "payout_ratio": round(payout_ratio, 2),       # 分红率(%)
         "fcf_coverage": round(fcf_coverage, 2),       # 自由现金流对分红覆盖倍数
+        "cash_flow_coverage": round(fcf_coverage, 2), # 同上别名:build_dividend_markdown 用此 key
         "payout_source": payout_source,               # 'capital_change_events' / 'cash_flow'
         "dividend_yield": dividend_yield,             # 股息率(%) — code 算,缺数据时 None
     }
