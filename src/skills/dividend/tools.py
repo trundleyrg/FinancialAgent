@@ -743,6 +743,131 @@ def compute_dividend_stability_years(
     return _compute_dividend_stability_years(stock_code, current_year, period)
 
 
+def compute_target_returns_table(
+    stock_code: str,
+    report_year: int,
+    period: str = "FY",
+    target_yields: Optional[List[float]] = None,
+) -> Dict[str, Any]:
+    """根据 DB 现存数据,反推「若股息率为 X% 时,理论市值/股价是多少」。
+
+    用法:用户问「若要达到某个股息率,公司市值/股价需要到多少」时倒推,
+    而不依赖外网估值接口。所有输入字段均来自本地表,计算确定性高:
+
+    必要字段(任何一项缺失都不会调用本函数 → 通过 ``missing_fields`` 告诉调用方):
+      - total_shares        : share_structure(已有 carry-forward 兜底)
+      - cash_per_10_shares  : capital_change_events(年报派息)
+
+    可选字段(展示用,缺失时仅影响表格的「当前价格」基线显示):
+      - current_price       : stock_daily_price(最新一日收盘价)
+
+    Args:
+        stock_code: 股票代码
+        report_year: 报告年度(用于定位「当期年报派息」事件)
+        period: 报告期间
+        target_yields: 目标股息率列表(百分数,例如 [3.0, 5.0]);默认 [3.0, 5.0]。
+
+    Returns:
+        {
+            "per_share_dividend": float | None,  # 当期每股派息(元),缺时 None
+            "total_shares":        float | None,  # 当期总股本(股)
+            "current_price":       float | None,  # 最新一日收盘价(元)
+            "rows": [
+                {"dividend_yield_pct": 3.0,
+                 "implied_price":      30.00,  # 元/股
+                 "implied_market_cap_yi": 17.01},  # 亿元
+                ...
+            ],
+            "missing_fields": ["total_shares", ...]  # 列出无法计算的字段
+        }
+        其中:
+          implied_price   = per_share × 100 / dividend_yield
+          implied_market_cap_yi = total_shares × implied_price / 1e8 (转亿元)
+    """
+    if target_yields is None:
+        target_yields = [3.0, 5.0]
+
+    result: Dict[str, Any] = {
+        "per_share_dividend": None,
+        "total_shares": None,
+        "current_price": None,
+        "rows": [],
+        "missing_fields": [],
+    }
+
+    # 取总股本(share_structure.carry-forward 由 fetch_total_shares_by_year 提供)
+    try:
+        conn = get_db()._duckdb_conn
+        share_row = conn.execute(
+            """
+            SELECT total_shares FROM share_structure
+            WHERE stock_code = ? AND report_year = ? AND report_period = ?
+              AND total_shares IS NOT NULL AND total_shares > 0
+            """,
+            [stock_code, report_year, period],
+        ).fetchone()
+    except Exception:
+        share_row = None
+    if share_row:
+        result["total_shares"] = float(share_row[0])
+    else:
+        result["missing_fields"].append("total_shares")
+
+    # 取当期每股派息(capital_change_events 中 cash_dividend 事件的 cash_per_10 / 10)
+    try:
+        events = conn.execute(
+            """
+            SELECT cash_per_10_shares FROM capital_change_events
+            WHERE stock_code = ? AND report_year = ? AND report_period = ?
+              AND event_type = 'cash_dividend'
+              AND cash_per_10_shares IS NOT NULL AND cash_per_10_shares > 0
+            ORDER BY cash_per_10_shares DESC LIMIT 1
+            """,
+            [stock_code, report_year, period],
+        ).fetchone()
+    except Exception:
+        events = None
+    if events:
+        result["per_share_dividend"] = float(events[0]) / 10.0
+    else:
+        result["missing_fields"].append("per_share_dividend")
+
+    # 取最新一日收盘价(stock_daily_price)
+    try:
+        price_row = conn.execute(
+            """
+            SELECT close_price, trade_date FROM stock_daily_price
+            WHERE stock_code = ? AND close_price IS NOT NULL
+            ORDER BY trade_date DESC LIMIT 1
+            """,
+            [stock_code],
+        ).fetchone()
+    except Exception:
+        price_row = None
+    if price_row and price_row[0] is not None:
+        result["current_price"] = float(price_row[0])
+
+    # 计算反推表:必须 per_share + total_shares 都在
+    if (
+        result["per_share_dividend"] is not None
+        and result["total_shares"] is not None
+        and result["total_shares"] > 0
+    ):
+        per_share = result["per_share_dividend"]
+        total = result["total_shares"]
+        for y in target_yields:
+            if y <= 0:
+                continue
+            implied_price = per_share * 100.0 / y
+            implied_cap = total * implied_price / 1e8  # 元 → 亿元
+            result["rows"].append({
+                "dividend_yield_pct": round(y, 2),
+                "implied_price": round(implied_price, 2),
+                "implied_market_cap_yi": round(implied_cap, 2),
+            })
+    return result
+
+
 def get_dividend_stats_with_fallback(
     stock_code: str, years: int = 5,
 ) -> Dict[str, Any]:
@@ -975,16 +1100,20 @@ def build_dividend_markdown(
     debt_chart_path: Optional[str] = None,
     debt_table: Optional[pd.DataFrame] = None,
     trend_years: Optional[int] = None,
+    target_returns_table: Optional[List[Dict[str, Any]]] = None,
+    target_returns_current_price: Optional[float] = None,
 ) -> str:
     """把 dividend skill 的 LLM 结果 + 趋势图 + 趋势表渲染成自包含 markdown 报告。
 
     章节顺序固定(图在上、表格在下):
     1. 标题 + 元数据
     2. 一、关键指标趋势:图(若有) + 多年趋势表(若有)
-    3. 二、关键指标:股息率 / 分红率 / 连续分红年限 / 现金流覆盖 / 健康度评分
+    3. 二、关键指标:股息率 / 分红率 / 连续分红年限 / 现金流覆盖(详见表后「指标解释」)
     4. 三-五、盈利能力 / 偿债能力 / 估值(子表)
     5. 六、风险因素(列表)
-    6. 七、投资评级 + 推理文本
+
+    注:不再生成「投资评级与理由」段;评级与推理文本由调用方自行处置
+    (skill_analysis_results 表已持久化)。
 
     Args:
         result: LLM 输出的 dict,字段参见 src/skills/dividend/SKILL.md。
@@ -1147,17 +1276,45 @@ def build_dividend_markdown(
         risk_lines.append("- 暂无")
     risk_lines += ["", "---", ""]
 
-    # 6. 七、投资评级与理由
-    rating = result.get("investment_rating", "N/A")
-    reasoning = result.get("reasoning") or "暂无分析理由"
-    rating_lines = [
-        "## 七、投资评级与理由",
-        "",
-        f"**投资评级: {rating}**",
-        "",
-        reasoning,
-        "",
-    ]
+    # 5b. 七、目标股息率 → 反推市值(用户提交历史代码变更阶段新增)。
+    # 表格列:股息率 / 对应市值(亿元) / 对应价格(元/股)。
+    # 输入行 list[dict]:每 dict 含 dividend_yield_pct / implied_price / implied_market_cap_yi。
+    # target_returns_current_price 可选,展示「当前价格」基线行,
+    # 让读者一眼看出当前股价位于 3%/5% 反推价之间的位置。
+    target_lines: list[str] = []
+    if target_returns_table:
+        target_lines = [
+            "## 七、目标股息率 → 反推市值",
+            "",
+            "若要达到以下股息率,公司市值 / 股价需达(根据当期年报派息 + 当期总股本反推):",
+            "",
+            "| 股息率 | 对应市值(亿元) | 对应价格(元/股) |",
+            "|------|------|------|",
+        ]
+        for r in target_returns_table:
+            try:
+                y = float(r.get("dividend_yield_pct"))
+                cap = float(r.get("implied_market_cap_yi"))
+                price = float(r.get("implied_price"))
+            except (TypeError, ValueError):
+                continue
+            target_lines.append(
+                f"| {y:.2f} | {cap:.2f} | {price:.2f} |"
+            )
+        if target_returns_current_price is not None and target_returns_current_price > 0:
+            target_lines.append(
+                f"| **当前价格** | **—** | **{target_returns_current_price:.2f}** |"
+            )
+        target_lines.append("")
+        target_lines.append(
+            "> **计算口径**:"
+            "implied_price = (年报派息 / 10) × 100 ÷ 目标股息率;"
+            "implied_market_cap = 总股本 × implied_price。"
+            "总股本取 `share_structure` 最新值;"
+            "派息取 `capital_change_events` 中 cash_dividend 事件的 `cash_per_10_shares`。"
+            "当前价格取 `stock_daily_price` 最后一交易日收盘价(前复权)。"
+        )
+        target_lines += ["", "---", ""]
 
     # 负债结构独立 section(图 + 表),与分红率表格分开展示
     # 若提供 debt_chart_path/debt_table 才会出现,否则不显示该 section
@@ -1178,16 +1335,16 @@ def build_dividend_markdown(
             )
             debt_lines.append("")
         debt_lines += ["---", ""]
-        # 负债结构占用「二」位置,后续 section 二-七 编号 → 三-八
+        # 负债结构占用「二」位置,后续 section 二-六 编号 → 三-七
         # 替换下游 section 的中文数字
         key_lines = _renumber_section(key_lines, offset=1)
         sub_lines = _renumber_section(sub_lines, offset=1)
         risk_lines = _renumber_section(risk_lines, offset=1)
-        rating_lines = _renumber_section(rating_lines, offset=1)
+        target_lines = _renumber_section(target_lines, offset=1)
 
     return "\n".join(
         header_lines + trend_lines + debt_lines + key_lines + sub_lines +
-        risk_lines + rating_lines,
+        risk_lines + target_lines,
     )
 
 
