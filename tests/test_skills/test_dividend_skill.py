@@ -347,9 +347,13 @@ def test_llm_result_metrics_rounded_to_two_decimals():
     assert "18.00" in md  # roe
     assert "15.21" in md  # pe_ratio: 银行家 5 前面奇数 0 → 15.20;标准 5 往上 → 15.21
     assert "2.10" in md   # pb_ratio: 2.1 → 2.10
-    # int 字段保持原样,不要变成 "10.00" / "82.00"
-    assert "| 10 |" in md
-    assert "| 82 |" in md
+    # int 字段保持原样(不要变成 "10.00")
+    assert "| 10 |" in md, "dividend_stability_years=10 应原样呈现"
+    # financial_health_score=82 不应在 markdown 出现(82 在关键指标段已剔除)
+    key_section = md[md.index("## 二、关键指标"):md.index("## 三、")]
+    assert "82" not in key_section, (
+        "财务健康度评分 82 不应在关键指标段出现(已被剔除)"
+    )
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -1801,3 +1805,241 @@ def test_build_dividend_markdown_includes_payout_ratio_calculation_note():
     note_pos = md.find("口径说明")
     assert note_pos > trend_section_pos, "注释应在一、关键指标趋势之后"
     assert note_pos < next_section_pos, "注释应在二、关键指标之前"
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 二、关键指标 段:财务健康度评分剔除 + 数据范围备注 + 指标解释
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def test_build_dividend_markdown_omits_financial_health_score():
+    """「二、关键指标」表里不应再有「财务健康度评分(0-100)」一行。
+
+    背景:LLM 评分在 NO_LLM / 非完整 LLM 环境下恒 N/A,留在表里观感差;
+    用户要求剔除(实际想要评分请直接看八、投资评级)。
+    """
+    md = build_dividend_markdown(
+        _FULL_RESULT,
+        chart_path=None,
+        table=None,
+        company_name="X",
+        stock_code="000001",
+        report_year=2024,
+    )
+    key_section = md[md.index("## 二、关键指标"):md.index("## 三、")]
+    assert "财务健康度评分" not in key_section, (
+        "二、关键指标表里不应再有「财务健康度评分」行"
+    )
+    # 即使 _FULL_RESULT 含 financial_health_score=82,该整数值也不应泄漏到关键指标段
+    assert "82" not in key_section, (
+        "财务健康度评分对应的整数值不应泄漏到关键指标段"
+    )
+
+
+def test_build_dividend_markdown_adds_data_scope_note_with_trend_years():
+    """trend_years=5 → 二、关键指标段加「数据范围」备注,提示读者
+    「连续分红年限」等长期口径基于近 5 年窗口,真实年限可能更久。
+
+    用户提交历史代码变更阶段提出的要求:不出具超 5 年回溯,但报告里
+    必须告诉读者这一点。
+    """
+    md = build_dividend_markdown(
+        _FULL_RESULT,
+        chart_path=None,
+        table=None,
+        company_name="测试",
+        stock_code="000001",
+        report_year=2024,
+        trend_years=5,
+    )
+    key_section = md[md.index("## 二、关键指标"):md.index("## 三、")]
+    # 关键三要素:trend_years 数字 + 「数据范围」关键词 + 「连续分红年限」提醒
+    assert "数据范围" in key_section, "应有「数据范围」备注"
+    assert "近 **5 年**" in key_section, (
+        "数据范围备注应包含 trend_years 数字(粗体格式)"
+    )
+    assert "连续分红年限" in key_section, (
+        "应提醒读者「连续分红年限」依赖窗口"
+    )
+    assert "实际" in key_section, "应说明真实年限可能长于此"
+
+
+def test_build_dividend_markdown_omits_data_scope_note_without_trend_years():
+    """trend_years=None → 不应显示「数据范围」备注。
+
+    兼容旧调用方:不传 trend_years 时报告不含数据范围备注。
+    """
+    md = build_dividend_markdown(
+        _FULL_RESULT,
+        chart_path=None,
+        table=None,
+        company_name="X",
+        stock_code="000001",
+        report_year=2024,
+        # trend_years 不传 → None
+    )
+    key_section = md[md.index("## 二、关键指标"):md.index("## 三、")]
+    assert "数据范围" not in key_section, (
+        "未传 trend_years 时不应有「数据范围」备注"
+    )
+
+
+def test_build_dividend_markdown_data_scope_note_uses_actual_years():
+    """trend_years=8 → 数据范围备注里的数字也应为 8(不写死)。"""
+    md = build_dividend_markdown(
+        _FULL_RESULT,
+        chart_path=None,
+        table=None,
+        company_name="X",
+        stock_code="000001",
+        report_year=2024,
+        trend_years=8,
+    )
+    key_section = md[md.index("## 二、关键指标"):md.index("## 三、")]
+    assert "近 **8 年**" in key_section, (
+        "数据范围备注应使用实际传入的 trend_years(8)"
+    )
+    assert "近 **5 年**" not in key_section
+
+
+def test_build_dividend_markdown_includes_metric_explanations():
+    """「指标解释」段跟在「二、关键指标」表后,含 6 项关键指标口径。
+
+    6 项:
+        股息率 / 分红率 / 连续分红年限 / 自由现金流对分红覆盖率 /
+        有息负债 / 有息负债占比
+    """
+    md = build_dividend_markdown(
+        _FULL_RESULT,
+        chart_path=None,
+        table=None,
+        company_name="X",
+        stock_code="000001",
+        report_year=2024,
+    )
+    # 段标题
+    assert "### 指标解释" in md, "应有「指标解释」段标题"
+    # 段位置:必须在「二、关键指标」之后、「三、」之前(独立段)
+    explanation_section_pos = md.index("### 指标解释")
+    section_two_pos = md.index("## 二、关键指标")
+    section_three_pos = md.index("## 三、")
+    assert section_two_pos < explanation_section_pos < section_three_pos, (
+        "「指标解释」应在「二、关键指标」之后、「三、」之前"
+    )
+
+    # 6 项关键指标口径必须出现
+    for metric in [
+        "股息率",
+        "分红率",
+        "连续分红年限",
+        "自由现金流对分红覆盖率",
+        "有息负债",
+        "有息负债占比",
+    ]:
+        assert metric in md, f"「指标解释」应包含「{metric}」的口径说明"
+
+
+def test_build_dividend_markdown_dividend_yield_explanation_references_stock_daily_price():
+    """股息率口径说明应明确「股价取自 stock_daily_price 最近一日收盘价」。
+
+    防止读者去搜别的概念算法;实际就是 stock_daily_price 表最后一行的
+    close_price,前复权(qfq)。
+    """
+    md = build_dividend_markdown(
+        _FULL_RESULT,
+        chart_path=None,
+        table=None,
+        company_name="X",
+        stock_code="000001",
+        report_year=2024,
+    )
+    # 在「指标解释」段内,股息率行含 stock_daily_price 引用 + 收盘价关键词
+    explanation_idx = md.index("### 指标解释")
+    # 段结束于下一个 "---" 分隔线或 "## " 段标题
+    end_idx = md.index("\n---\n", explanation_idx)
+    explanation_section = md[explanation_idx:end_idx]
+    # 找到「股息率」(非「股息率(%)」行 — 由于 ★标记★ 在用粗体格式
+    # 实际渲染为 "**股息率**(%) = ..." 起头)
+    yield_match = next(
+        (i for i, line in enumerate(explanation_section.split("\n"))
+         if line.startswith("- **股息率**")),
+        None,
+    )
+    assert yield_match is not None, "应有「股息率」bullet 行"
+    yield_line = explanation_section.split("\n")[yield_match]
+    assert "stock_daily_price" in yield_line, (
+        f"股息率口径应引用 stock_daily_price 表;实际行:{yield_line!r}"
+    )
+    assert "收盘价" in yield_line
+    assert "前复权" in yield_line or "复权" in yield_line
+
+
+def test_build_dividend_markdown_interest_debt_definition_lists_components():
+    """「有息负债」口径说明应枚举主要组成:短期借款、长期借款、应付债券
+    、一年内到期的非流动负债、租赁负债。
+    """
+    md = build_dividend_markdown(
+        _FULL_RESULT,
+        chart_path=None,
+        table=None,
+        company_name="X",
+        stock_code="000001",
+        report_year=2024,
+    )
+    explanation_idx = md.index("### 指标解释")
+    end_idx = md.index("\n---\n", explanation_idx)
+    explanation_section = md[explanation_idx:end_idx]
+    # 找到「有息负债」非「有息负债占比」那行(以粗体 ** 标识)
+    interest_debt_match = next(
+        (i for i, line in enumerate(explanation_section.split("\n"))
+         if line.startswith("- **有息负债**(亿元)")),
+        None,
+    )
+    assert interest_debt_match is not None, "应有「有息负债」bullet"
+    interest_debt_line = explanation_section.split("\n")[interest_debt_match]
+    for component in [
+        "短期借款", "长期借款", "应付债券",
+        "一年内到期非流动负债", "租赁负债",
+    ]:
+        assert component in interest_debt_line, (
+            f"「有息负债」口径应枚举「{component}」;实际行:{interest_debt_line!r}"
+        )
+
+
+def test_build_dividend_markdown_section_two_structure_after_changes():
+    """整合:trend_years=5 + 完整 result → 二、关键指标段结构应该是:
+        1. 6 行指标表(无 财务健康度)
+        2. > 数据范围 备注
+        3. ### 指标解释 段(6 个 bullet)
+        4. ---
+    """
+    md = build_dividend_markdown(
+        _FULL_RESULT,
+        chart_path=None,
+        table=None,
+        company_name="综合",
+        stock_code="000002",
+        report_year=2024,
+        trend_years=5,
+    )
+    section_two_start = md.index("## 二、关键指标")
+    section_three_start = md.index("## 三、")
+    section_two = md[section_two_start:section_three_start]
+
+    # 1. 表头
+    assert "| 指标 | 数值 |" in section_two
+    assert "|------|------|" in section_two
+    # 2. 6 行指标
+    rows = [
+        "股息率(%)", "分红率(%)", "连续分红年限(年)",
+        "自由现金流对分红覆盖率(倍)",
+        "有息负债(亿元)", "有息负债占比(%)",
+    ]
+    for r in rows:
+        assert r in section_two, f"二、关键指标表应含「{r}」行"
+    # 3. 顺序:数据范围 备注 在表后、指标解释 前
+    pos_table_data_note = section_two.index("数据范围")
+    pos_metric_explanation = section_two.index("### 指标解释")
+    assert pos_table_data_note < pos_metric_explanation, (
+        "数据范围备注应在指标解释段之前"
+    )
