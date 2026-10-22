@@ -1329,15 +1329,9 @@ def build_dividend_markdown(
                 f"| {y:.2f} | {cap:.2f} | {price:.2f} |"
             )
         if target_returns_current_price is not None and target_returns_current_price > 0:
-            # 「当前价格」行带来源标注,读者一眼知道这个价从哪来、哪天的
-            src_bits = []
-            if target_returns_current_price_source:
-                src_bits.append(f"`{target_returns_current_price_source}`")
-            if target_returns_current_price_date:
-                src_bits.append(str(target_returns_current_price_date))
-            suffix = f" <br>({' · '.join(src_bits)})" if src_bits else ""
+            # 表格只放数字,来源与取价日期放下方「计算口径」备注里,避免表格过宽
             target_lines.append(
-                f"| **当前价格**{suffix} | **—** | **{target_returns_current_price:.2f}** |"
+                f"| **当前价格** | **—** | **{target_returns_current_price:.2f}** |"
             )
         target_lines.append("")
         price_src = target_returns_current_price_source or "stock_market_snapshot"

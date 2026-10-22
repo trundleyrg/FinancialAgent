@@ -2255,7 +2255,11 @@ def test_compute_target_returns_table_reports_price_source():
 
 
 def test_build_dividend_markdown_shows_current_price_source():
-    """markdown 的「当前价格」行应标出来源表名 + 取价日期。"""
+    """来源表名 + 取价日期写在表格下方的「计算口径」备注里,不放表格内。
+
+    表格只放数字(用户要求:不用在表格里写日期时间),
+    避免 markdown 表格因长文本而排版过宽。
+    """
     target_rows = [
         {"dividend_yield_pct": 3.0, "implied_market_cap_yi": 170.14, "implied_price": 30.00},
         {"dividend_yield_pct": 5.0, "implied_market_cap_yi": 102.09, "implied_price": 18.00},
@@ -2269,16 +2273,21 @@ def test_build_dividend_markdown_shows_current_price_source():
         target_returns_current_price_source="stock_daily_price",
         target_returns_current_price_date="2026-10-21",
     )
-    # 当前价格行后面应带来源标注
-    assert "当前价格" in md
-    # 来源表名出现在报告里
-    assert "stock_daily_price" in md, "应标出当前价格来源表"
-    # 取价日期出现
-    assert "2026-10-21" in md, "应标出当前价格的取价日期"
-    # 来源信息应在「计算口径」注释附近,方便读者核对
-    assert "当前价格取自" in md or "当前价取自" in md, (
-        "口径说明里应写明当前价格取自哪张表"
+    # 表格内「当前价格」行只有数字,不含来源/日期
+    assert "| **当前价格** | **—** | **20.84** |" in md, (
+        "「当前价格」表格行应只有数字"
     )
+    assert "<br>" not in md.split("| **当前价格**")[1].split("\n")[0], (
+        "「当前价格」行内不应有 <br> 换行(来源信息应放备注)"
+    )
+    # 来源表名 + 日期出现在「计算口径」备注里
+    assert "stock_daily_price" in md, "备注里应写明来源表"
+    assert "2026-10-21" in md, "备注里应写明取价日期"
+    assert "当前价格取自" in md, "口径说明里应写明当前价格取自哪张表"
+    # 备注在表格之后
+    pos_table = md.index("| **当前价格** |")
+    pos_note = md.index("当前价格取自")
+    assert pos_note > pos_table, "来源备注应在表格下方"
 
 
 def test_build_dividend_markdown_price_source_optional():
