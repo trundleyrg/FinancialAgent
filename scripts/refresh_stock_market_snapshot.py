@@ -27,6 +27,10 @@ from src.tools.stock_daily_price_fetcher import (
     fetch_and_save_daily_prices,
     load_daily_prices,
 )
+from src.tools.valuation_fetcher import (
+    fetch_and_save_valuation,
+    get_latest_valuation,
+)
 
 
 def parse_args(argv: list[str]):
@@ -54,6 +58,10 @@ def parse_args(argv: list[str]):
         "--adjust", default="qfq", choices=("", "qfq", "hfq"),
         help="复权方式,qfq=前复权(默认,hfq=后复权,''=不复权)",
     )
+    parser.add_argument(
+        "--val-lookback", type=int, default=365,
+        help="估值快照回溯天数,默认 365(约 243 个交易日);传 0 表示全量历史",
+    )
     return parser.parse_args(argv)
 
 
@@ -64,21 +72,42 @@ def main() -> int:
         code = raw.strip()
         print(f"\n=== {code} ===")
 
-        # 估值快照
+        # 估值快照 — 优先用 stock_value_em(东财个股估值,带历史序列)。
+        # 旧链路(spot_em / 百度)仅在 stock_value_em 失败时兜底,
+        # 因为 2026-09 起百度接口频繁断连。
         if not args.price_only:
-            snap_id = fetch_and_save(code)
-            if snap_id is None:
-                print(f"  [valuation] 抓取失败:所有 akshare 源都不可用")
-                failed += 1
+            val_res = None
+            try:
+                val_res = fetch_and_save_valuation(
+                    code,
+                    lookback_days=args.val_lookback or None,
+                )
+            except Exception as exc:
+                print(f"  [valuation] stock_value_em 异常: {exc}")
+            if val_res and (val_res["inserted"] or val_res["updated"]):
+                latest = get_latest_valuation(code) or {}
+                print(
+                    f"  [valuation] 插入 {val_res['inserted']} / 更新 {val_res['updated']}; "
+                    f"date={latest.get('snapshot_date')} "
+                    f"close={latest.get('close_price')} PE={latest.get('pe_ratio')} "
+                    f"PB={latest.get('pb_ratio')} cap={latest.get('total_market_cap')} "
+                    f"src={latest.get('source')}"
+                )
             else:
-                latest = load_latest_snapshot(code)
-                if latest:
-                    print(
-                        f"  [valuation] id={snap_id} date={latest['snapshot_date']} "
-                        f"close={latest['close_price']} PE={latest['pe_ratio']} "
-                        f"PB={latest['pb_ratio']} cap={latest['total_market_cap']} "
-                        f"src={latest['source']}"
-                    )
+                # 兜底:旧链路(单日快照,无历史)
+                snap_id = fetch_and_save(code)
+                if snap_id is None:
+                    print(f"  [valuation] 抓取失败:所有 akshare 源都不可用")
+                    failed += 1
+                else:
+                    latest = load_latest_snapshot(code)
+                    if latest:
+                        print(
+                            f"  [valuation] 兜底 id={snap_id} date={latest['snapshot_date']} "
+                            f"close={latest['close_price']} PE={latest['pe_ratio']} "
+                            f"PB={latest['pb_ratio']} cap={latest['total_market_cap']} "
+                            f"src={latest['source']}"
+                        )
 
         # 日线
         if args.with_price or args.price_only:

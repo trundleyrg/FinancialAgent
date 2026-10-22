@@ -319,8 +319,12 @@ def run(
             dividend_info["market_dividend_stats"] = dividend_stats
             dividend_info["current_price"] = current_price
             dividend_info["pb_ratio"] = pb_ratio
-            dividend_info["pe_ratio"] = None  # akshare get_stock_pe_pb_history 不返回 PE
-            dividend_info["market_cap"] = None  # 同上
+            # PE / 总市值:get_stock_market_data 的 akshare 实时链路
+            # (stock_zh_a_hist + 百度 PB)不返回 PE,但 DB 快照链路
+            # (stock_market_snapshot,数据源 akshare_value_em)有完整
+            # PE(TTM) / 总市值,故从 latest 记录里取。
+            dividend_info["pe_ratio"] = (latest or {}).get("pe")
+            dividend_info["market_cap"] = (latest or {}).get("market_cap")
 
             # 总股本:已在第 3 步用 _fetch_total_shares 取过,这里复用 cur_total_shares。
             dividend_info["total_shares"] = cur_total_shares
@@ -387,7 +391,14 @@ def run(
                 "financial_health_score": dividend_info.get("financial_health_score"),
                 "profitability": profitability,
                 "solvency": solvency,
-                "valuation": {},
+                # 估值:PE / PB / 总市值由 code 从 DB 快照算,不依赖 LLM。
+                # LLM 链路下这两个字段也会在下方被 result 的 LLM 输出覆盖。
+                "valuation": {
+                    "pe_ratio": dividend_info.get("pe_ratio"),
+                    "pb_ratio": dividend_info.get("pb_ratio"),
+                    "market_cap": dividend_info.get("market_cap"),
+                    "current_price": dividend_info.get("current_price"),
+                },
                 "risk_factors": dividend_info.get("risk_factors", []),
             }
         else:
