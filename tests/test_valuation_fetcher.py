@@ -194,3 +194,98 @@ def test_save_upserts_idempotently():
 
     assert first["inserted"] == 1
     assert first["updated"] == 0
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 估值分位(PE / PB 在历史区间中的位置)
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def test_compute_valuation_percentile_basic():
+    """分位 = 历史序列中 <= 当前值的比例 × 100。
+
+    场景:PE 序列 [10, 12, 14, 16, 18],当前 PE=14
+      → 小于等于 14 的有 [10,12,14] 共 3 个 → 3/5 = 60%
+    """
+    from src.tools.valuation_fetcher import compute_valuation_percentile
+
+    hist = {"pe_ratio": [10.0, 12.0, 14.0, 16.0, 18.0]}
+    res = compute_valuation_percentile(hist, {"pe_ratio": 14.0})
+    assert res["pe_ratio"]["percentile"] == pytest.approx(60.0)
+    assert res["pe_ratio"]["min"] == 10.0
+    assert res["pe_ratio"]["max"] == 18.0
+    assert res["pe_ratio"]["median"] == 14.0
+    assert res["pe_ratio"]["count"] == 5
+
+
+def test_compute_valuation_percentile_below_min():
+    """当前值低于历史最小值 → 分位 0%(超跌)。"""
+    from src.tools.valuation_fetcher import compute_valuation_percentile
+
+    hist = {"pe_ratio": [20.0, 30.0, 40.0]}
+    res = compute_valuation_percentile(hist, {"pe_ratio": 15.0})
+    assert res["pe_ratio"]["percentile"] == 0.0
+
+
+def test_compute_valuation_percentile_above_max():
+    """当前值高于历史最大值 → 分位 100%(超涨)。
+
+    样本数需 >= min_samples(默认 3),故用 3 个历史值。
+    """
+    from src.tools.valuation_fetcher import compute_valuation_percentile
+
+    hist = {"pe_ratio": [10.0, 20.0, 30.0]}
+    res = compute_valuation_percentile(hist, {"pe_ratio": 99.0})
+    assert res["pe_ratio"]["percentile"] == 100.0
+
+
+def test_compute_valuation_percentile_skips_none():
+    """序列里的 None(亏损日)应被剔除,不参与分母。"""
+    from src.tools.valuation_fetcher import compute_valuation_percentile
+
+    hist = {"pe_ratio": [10.0, None, 20.0, None, 30.0]}
+    res = compute_valuation_percentile(hist, {"pe_ratio": 20.0})
+    assert res["pe_ratio"]["count"] == 3, "None 不应计入 count"
+    assert res["pe_ratio"]["percentile"] == pytest.approx(200 / 3)  # 2/3
+
+
+def test_compute_valuation_percentile_too_few_samples():
+    """样本 < 3 天时不给分位(样本太少,分位数没意义)。"""
+    from src.tools.valuation_fetcher import compute_valuation_percentile
+
+    hist = {"pe_ratio": [10.0, 20.0]}
+    res = compute_valuation_percentile(hist, {"pe_ratio": 15.0})
+    assert res["pe_ratio"]["percentile"] is None, "样本不足时应返回 None"
+    assert res["pe_ratio"]["count"] == 2
+
+
+def test_compute_valuation_percentile_current_none():
+    """当前值缺失 → percentile None,但 min/max/median 仍给出(供读者参考区间)。"""
+    from src.tools.valuation_fetcher import compute_valuation_percentile
+
+    hist = {"pe_ratio": [10.0, 20.0, 30.0, 40.0]}
+    res = compute_valuation_percentile(hist, {"pe_ratio": None})
+    assert res["pe_ratio"]["percentile"] is None
+    assert res["pe_ratio"]["min"] == 10.0
+    assert res["pe_ratio"]["max"] == 40.0
+
+
+def test_compute_valuation_percentile_handles_pe_pb_together():
+    """PE / PB 同时算,互不影响。"""
+    from src.tools.valuation_fetcher import compute_valuation_percentile
+
+    hist = {
+        "pe_ratio": [10.0, 12.0, 14.0, 16.0, 18.0],
+        "pb_ratio": [1.0, 2.0, 3.0, 4.0, 5.0],
+    }
+    cur = {"pe_ratio": 14.0, "pb_ratio": 2.0}
+    res = compute_valuation_percentile(hist, cur)
+    assert res["pe_ratio"]["percentile"] == pytest.approx(60.0)
+    assert res["pb_ratio"]["percentile"] == pytest.approx(40.0)
+
+
+def test_compute_valuation_percentile_empty_history():
+    """历史序列缺失该字段 → 返回空 dict(不崩)。"""
+    from src.tools.valuation_fetcher import compute_valuation_percentile
+
+    assert compute_valuation_percentile({}, {"pe_ratio": 14.0}) == {}
+    assert compute_valuation_percentile({"pb_ratio": []}, {"pb_ratio": 1.0}) == {}

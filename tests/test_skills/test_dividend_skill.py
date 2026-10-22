@@ -2307,3 +2307,57 @@ def test_build_dividend_markdown_price_source_optional():
     assert "20.84" in md
     # 不应崩,也不该有空的 source 占位
     assert "None" not in md.split("目标股息率")[1][:500]
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 估值分位(PE / PB 在历史区间中的位置)
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def test_build_dividend_markdown_shows_valuation_percentile():
+    """估值段应显示 PE / PB 的历史分位与区间。"""
+    result = dict(
+        _FULL_RESULT,
+        valuation={
+            "pe_ratio": 14.92,
+            "pb_ratio": 3.60,
+            "pe_percentile": 28.0,
+            "pb_percentile": 53.9,
+            "pe_range": (13.55, 16.88),
+            "pb_range": (3.01, 4.12),
+            "valuation_samples": 243,
+        },
+    )
+    md = build_dividend_markdown(
+        result, chart_path=None, table=None,
+        company_name="测试", stock_code="000001", report_year=2024,
+    )
+    val_section = md[md.index("估值"):]
+    # PE / PB 分位
+    assert "28.0" in val_section, "应显示 PE 分位"
+    assert "53.9" in val_section, "应显示 PB 分位"
+    # 区间
+    assert "13.55" in val_section and "16.88" in val_section, "应显示 PE 历史区间"
+    # 样本天数
+    assert "243" in val_section, "应显示样本天数(分位可信度)"
+    # 应有分位说明
+    assert "分位" in val_section
+
+
+def test_build_dividend_markdown_valuation_percentile_optional():
+    """无分位数据时估值段只显示 PE / PB,不加分行(向后兼容)。"""
+    result = dict(
+        _FULL_RESULT,
+        valuation={"pe_ratio": 14.92, "pb_ratio": 3.60},
+    )
+    md = build_dividend_markdown(
+        result, chart_path=None, table=None,
+        company_name="测试", stock_code="000001", report_year=2024,
+    )
+    val_section = md[md.index("估值"):]
+    assert "市盈率(倍) | 14.92" in val_section
+    assert "市净率(倍) | 3.60" in val_section
+    # 不应有分位行
+    assert "分位" not in val_section.split("---")[0], (
+        "无分位数据时不应渲染分位行"
+    )

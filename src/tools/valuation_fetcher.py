@@ -304,3 +304,89 @@ def get_latest_valuation(stock_code: str) -> Optional[Dict[str, Any]]:
         "total_market_cap": row[4],
         "source": row[5],
     }
+
+def _percentile_of(sorted_vals: List[float], current: float) -> float:
+    """返回 current 在 sorted_vals 中的分位(%)。
+
+    用「<= current 的比例」而非插值法,理由:PE/PB 的分位是「历史多少天
+    比现在便宜」的直觉口径,读者看到 "28% 分位" 会理解为「历史上 72% 的
+    时间估值比现在贵」。插值法(如 numpy.percentileofscore 的
+    'midpoint')会给出 27.4% 这种小数,与直觉脱节。
+    """
+    if not sorted_vals:
+        return 0.0
+    return sum(1 for v in sorted_vals if v <= current) / len(sorted_vals) * 100
+
+
+def compute_valuation_percentile(
+    history: Dict[str, Any],
+    current: Dict[str, Any],
+    min_samples: int = 3,
+) -> Dict[str, Dict[str, Any]]:
+    """算 PE / PB 当前值在历史区间中的分位。
+
+    回答「现在贵不贵」:分位低 = 相对历史便宜,分位高 = 相对历史贵。
+
+    Args:
+        history: ``load_valuation_history`` 的返回值(每个 key 是 list,
+            元素可能是 None — 亏损股无 PE)。
+        current: 当前值 ``{"pe_ratio": ..., "pb_ratio": ...}``。
+        min_samples: 样本数下限,少于该值不给分位(样本太少分位数没意义),
+            但仍返回 min / max / median 供读者参考区间。
+
+    Returns:
+        ``{field: {"percentile": float|None, "min": float|None,
+                   "max": float|None, "median": float|None,
+                   "count": int}}``,无数据的字段不出现。
+
+    示例(600285 2026-10-22,近 243 个交易日):
+        PE 14.92 → 28.0% 分位(历史区间 13.55~16.88)
+        PB  3.60 → 53.9% 分位(历史区间  3.01~4.12)
+    """
+    out: Dict[str, Dict[str, Any]] = {}
+    for field in ("pe_ratio", "pb_ratio"):
+        raw_series = history.get(field) or []
+        vals = sorted(
+            float(v) for v in raw_series if v is not None and _to_number(v) is not None
+        )
+        if not vals:
+            continue
+        cur = _to_number(current.get(field))
+        count = len(vals)
+        mid = count // 2
+        median = vals[mid] if count % 2 else (vals[mid - 1] + vals[mid]) / 2
+        out[field] = {
+            "percentile": (
+                _percentile_of(vals, cur) if (cur is not None and count >= min_samples) else None
+            ),
+            "min": vals[0],
+            "max": vals[-1],
+            "median": round(median, 4),
+            "count": count,
+        }
+    return out
+
+
+def load_valuation_percentile(
+    stock_code: str,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    min_samples: int = 3,
+) -> Dict[str, Dict[str, Any]]:
+    """一站式:读 ``stock_market_snapshot`` 历史 → 算 PE/PB 分位。
+
+    ``end_date`` 默认取表里最新一条,所以「当前值」始终是最近有数据的
+    那天,而不是今天 —— 停牌 / 非交易日时也拿得到分位。
+    """
+    rows = load_valuation_history(stock_code, start_date=start_date, end_date=end_date)
+    if not rows:
+        return {}
+    current = {
+        "pe_ratio": rows[-1].get("pe_ratio"),
+        "pb_ratio": rows[-1].get("pb_ratio"),
+    }
+    history: Dict[str, Any] = {
+        "pe_ratio": [r.get("pe_ratio") for r in rows],
+        "pb_ratio": [r.get("pb_ratio") for r in rows],
+    }
+    return compute_valuation_percentile(history, current, min_samples=min_samples)

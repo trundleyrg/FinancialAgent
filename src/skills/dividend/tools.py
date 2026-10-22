@@ -1285,11 +1285,46 @@ def build_dividend_markdown(
             ("市净率(倍)", val.get("pb_ratio")),
         ]),
     ]
+    # 估值分位:有 pe_percentile / pb_percentile 时追加「历史分位(近 N 天)」
+    # 与「历史区间」两行,回答「现在贵不贵」。分位低 = 相对历史便宜。
+    pe_pct = val.get("pe_percentile")
+    pb_pct = val.get("pb_percentile")
+    pe_rng = val.get("pe_range") or ()
+    pb_rng = val.get("pb_range") or ()
+    if pe_pct is not None and len(pe_rng) >= 2:
+        sub_sections[2][1].append((
+            f"PE 历史分位(%)",
+            round(pe_pct, 1),
+        ))
+        sub_sections[2][1].append((
+            "PE 历史区间(倍)",
+            f"{pe_rng[0]:.2f} ~ {pe_rng[1]:.2f}",
+        ))
+    if pb_pct is not None and len(pb_rng) >= 2:
+        sub_sections[2][1].append((
+            f"PB 历史分位(%)",
+            round(pb_pct, 1),
+        ))
+        sub_sections[2][1].append((
+            "PB 历史区间(倍)",
+            f"{pb_rng[0]:.2f} ~ {pb_rng[1]:.2f}",
+        ))
+    samples = val.get("valuation_samples")
+    if samples and (pe_pct is not None or pb_pct is not None):
+        sub_sections[2][1].append(("估值样本(交易日)", int(samples)))
+
     sub_lines: list[str] = []
     for heading, rows in sub_sections:
         sub_lines += [heading, "", "| 指标 | 数值 |", "|------|------|"]
         for name, value in rows:
             sub_lines.append(f"| {name} | {_md_format_value(value)} |")
+        if heading.startswith("## 五、估值") and (pe_pct is not None or pb_pct is not None):
+            sub_lines.append("")
+            sub_lines.append(
+                "> **口径说明**:历史分位(%) = 当前值在近 "
+                f"{samples or 'N'} 个交易日中不超过它的比例。"
+                "分位越低表示相对历史越便宜(PE < 30% 分位 = 比七成时间便宜)。"
+            )
         sub_lines.append("")
     sub_lines += ["---", ""]
 

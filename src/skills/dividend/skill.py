@@ -58,6 +58,7 @@ from src.tools.calculation_tools import (
 from src.tools.db_tools import get_all_financial_data, get_multi_year_financial_data
 from src.tools.market_data_tool import get_stock_market_data
 from src.tools.skill_result_writer import save_skill_result
+from src.tools.valuation_fetcher import load_valuation_percentile
 from src.db.db_connector import get_db
 
 logger = logging.getLogger("Skills.Dividend")
@@ -326,6 +327,24 @@ def run(
             dividend_info["pe_ratio"] = (latest or {}).get("pe")
             dividend_info["market_cap"] = (latest or {}).get("market_cap")
 
+            # PE / PB 历史分位:回答「现在贵不贵」。数据源同为
+            # stock_market_snapshot(stock_value_em 写入的历史序列),
+            # 样本不足 3 天时返回 {} —— 估值段会退回只显示 PE / PB。
+            try:
+                pct = load_valuation_percentile(stock_code)
+            except Exception as exc:
+                logger.debug("计算估值分位失败 %s: %s", stock_code, exc)
+                pct = {}
+            if pct:
+                pe_d, pb_d = pct.get("pe_ratio") or {}, pct.get("pb_ratio") or {}
+                dividend_info["pe_percentile"] = pe_d.get("percentile")
+                dividend_info["pb_percentile"] = pb_d.get("percentile")
+                dividend_info["pe_range"] = (pe_d.get("min"), pe_d.get("max"))
+                dividend_info["pb_range"] = (pb_d.get("min"), pb_d.get("max"))
+                dividend_info["valuation_samples"] = max(
+                    pe_d.get("count") or 0, pb_d.get("count") or 0,
+                )
+
             # 总股本:已在第 3 步用 _fetch_total_shares 取过,这里复用 cur_total_shares。
             dividend_info["total_shares"] = cur_total_shares
 
@@ -398,6 +417,12 @@ def run(
                     "pb_ratio": dividend_info.get("pb_ratio"),
                     "market_cap": dividend_info.get("market_cap"),
                     "current_price": dividend_info.get("current_price"),
+                    # PE / PB 历史分位 — 回答「现在贵不贵」
+                    "pe_percentile": dividend_info.get("pe_percentile"),
+                    "pb_percentile": dividend_info.get("pb_percentile"),
+                    "pe_range": dividend_info.get("pe_range"),
+                    "pb_range": dividend_info.get("pb_range"),
+                    "valuation_samples": dividend_info.get("valuation_samples"),
                 },
                 "risk_factors": dividend_info.get("risk_factors", []),
             }
