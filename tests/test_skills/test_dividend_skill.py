@@ -2226,3 +2226,75 @@ def test_compute_target_returns_table_skips_invalid_yield():
     assert len(res["rows"]) == 2
     yields = [r["dividend_yield_pct"] for r in res["rows"]]
     assert yields == [3.0, 5.0]
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 当前价格来源标注(用户提交历史代码变更阶段新增)
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def test_compute_target_returns_table_reports_price_source():
+    """compute_target_returns_table 应返回 current_price_source + current_price_date。
+
+    来源链:优先 stock_market_snapshot(带 PE/PB 的估值快照),
+    退化到 stock_daily_price(纯日线)。两者都要给出实际取价日期,
+    让读者知道「当前价格」到底是哪天的收盘价。
+    """
+    from src.skills.dividend.tools import compute_target_returns_table
+
+    res = compute_target_returns_table("600285", 2024, "FY")
+    # 600285 2024 两个来源都有数据,优先 stock_market_snapshot
+    assert "current_price_source" in res, "应返回 current_price_source"
+    assert res["current_price_source"], "current_price_source 不应为空"
+    assert "current_price_date" in res, "应返回 current_price_date"
+    assert res["current_price_date"], "current_price_date 不应为空"
+    # 日期应是 ISO 格式 YYYY-MM-DD
+    assert len(str(res["current_price_date"])) == 10, (
+        f"日期应为 YYYY-MM-DD,实际 {res['current_price_date']}"
+    )
+
+
+def test_build_dividend_markdown_shows_current_price_source():
+    """markdown 的「当前价格」行应标出来源表名 + 取价日期。"""
+    target_rows = [
+        {"dividend_yield_pct": 3.0, "implied_market_cap_yi": 170.14, "implied_price": 30.00},
+        {"dividend_yield_pct": 5.0, "implied_market_cap_yi": 102.09, "implied_price": 18.00},
+    ]
+    md = build_dividend_markdown(
+        _FULL_RESULT,
+        chart_path=None, table=None,
+        company_name="测试", stock_code="000001", report_year=2024,
+        target_returns_table=target_rows,
+        target_returns_current_price=20.84,
+        target_returns_current_price_source="stock_daily_price",
+        target_returns_current_price_date="2026-10-21",
+    )
+    # 当前价格行后面应带来源标注
+    assert "当前价格" in md
+    # 来源表名出现在报告里
+    assert "stock_daily_price" in md, "应标出当前价格来源表"
+    # 取价日期出现
+    assert "2026-10-21" in md, "应标出当前价格的取价日期"
+    # 来源信息应在「计算口径」注释附近,方便读者核对
+    assert "当前价格取自" in md or "当前价取自" in md, (
+        "口径说明里应写明当前价格取自哪张表"
+    )
+
+
+def test_build_dividend_markdown_price_source_optional():
+    """不传 source/date 时不崩,只是不显示来源标注(向后兼容)。"""
+    target_rows = [
+        {"dividend_yield_pct": 3.0, "implied_market_cap_yi": 170.14, "implied_price": 30.00},
+    ]
+    md = build_dividend_markdown(
+        _FULL_RESULT,
+        chart_path=None, table=None,
+        company_name="测试", stock_code="000001", report_year=2024,
+        target_returns_table=target_rows,
+        target_returns_current_price=20.84,
+        # 不传 source / date
+    )
+    assert "当前价格" in md
+    assert "20.84" in md
+    # 不应崩,也不该有空的 source 占位
+    assert "None" not in md.split("目标股息率")[1][:500]

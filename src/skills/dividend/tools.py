@@ -791,6 +791,8 @@ def compute_target_returns_table(
         "per_share_dividend": None,
         "total_shares": None,
         "current_price": None,
+        "current_price_source": None,   # 当前价格取自哪张表
+        "current_price_date": None,     # 取价日期(ISO YYYY-MM-DD)
         "rows": [],
         "missing_fields": [],
     }
@@ -832,20 +834,43 @@ def compute_target_returns_table(
     else:
         result["missing_fields"].append("per_share_dividend")
 
-    # 取最新一日收盘价(stock_daily_price)
+    # 取「当前价格」,记录来源表名 + 取价日期,便于读者核对。
+    # 来源优先级:
+    #   1. stock_market_snapshot — 估值快照(含 PE/PB/总市值),
+    #      是 dividend_yield 的权威来源(与 get_stock_market_data 一致)
+    #   2. stock_daily_price — 纯日线表,快照缺失时兜底
     try:
-        price_row = conn.execute(
+        snap_row = conn.execute(
             """
-            SELECT close_price, trade_date FROM stock_daily_price
+            SELECT close_price, snapshot_date, source FROM stock_market_snapshot
             WHERE stock_code = ? AND close_price IS NOT NULL
-            ORDER BY trade_date DESC LIMIT 1
+            ORDER BY snapshot_date DESC LIMIT 1
             """,
             [stock_code],
         ).fetchone()
     except Exception:
-        price_row = None
-    if price_row and price_row[0] is not None:
-        result["current_price"] = float(price_row[0])
+        snap_row = None
+    if snap_row and snap_row[0] is not None:
+        result["current_price"] = float(snap_row[0])
+        result["current_price_source"] = "stock_market_snapshot"
+        result["current_price_date"] = str(snap_row[1]) if snap_row[1] else None
+
+    if result["current_price"] is None:
+        try:
+            price_row = conn.execute(
+                """
+                SELECT close_price, trade_date FROM stock_daily_price
+                WHERE stock_code = ? AND close_price IS NOT NULL
+                ORDER BY trade_date DESC LIMIT 1
+                """,
+                [stock_code],
+            ).fetchone()
+        except Exception:
+            price_row = None
+        if price_row and price_row[0] is not None:
+            result["current_price"] = float(price_row[0])
+            result["current_price_source"] = "stock_daily_price"
+            result["current_price_date"] = str(price_row[1]) if price_row[1] else None
 
     # 计算反推表:必须 per_share + total_shares 都在
     if (
@@ -1102,6 +1127,8 @@ def build_dividend_markdown(
     trend_years: Optional[int] = None,
     target_returns_table: Optional[List[Dict[str, Any]]] = None,
     target_returns_current_price: Optional[float] = None,
+    target_returns_current_price_source: Optional[str] = None,
+    target_returns_current_price_date: Optional[str] = None,
 ) -> str:
     """把 dividend skill 的 LLM 结果 + 趋势图 + 趋势表渲染成自包含 markdown 报告。
 
@@ -1302,17 +1329,26 @@ def build_dividend_markdown(
                 f"| {y:.2f} | {cap:.2f} | {price:.2f} |"
             )
         if target_returns_current_price is not None and target_returns_current_price > 0:
+            # 「当前价格」行带来源标注,读者一眼知道这个价从哪来、哪天的
+            src_bits = []
+            if target_returns_current_price_source:
+                src_bits.append(f"`{target_returns_current_price_source}`")
+            if target_returns_current_price_date:
+                src_bits.append(str(target_returns_current_price_date))
+            suffix = f" <br>({' · '.join(src_bits)})" if src_bits else ""
             target_lines.append(
-                f"| **当前价格** | **—** | **{target_returns_current_price:.2f}** |"
+                f"| **当前价格**{suffix} | **—** | **{target_returns_current_price:.2f}** |"
             )
         target_lines.append("")
+        price_src = target_returns_current_price_source or "stock_market_snapshot"
+        price_date = target_returns_current_price_date or "最近交易日"
         target_lines.append(
             "> **计算口径**:"
             "implied_price = (年报派息 / 10) × 100 ÷ 目标股息率;"
             "implied_market_cap = 总股本 × implied_price。"
             "总股本取 `share_structure` 最新值;"
             "派息取 `capital_change_events` 中 cash_dividend 事件的 `cash_per_10_shares`。"
-            "当前价格取 `stock_daily_price` 最后一交易日收盘价(前复权)。"
+            f"当前价格取自 `{price_src}` 表 {price_date} 的收盘价(前复权)。"
         )
         target_lines += ["", "---", ""]
 

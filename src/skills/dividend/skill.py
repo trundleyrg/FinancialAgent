@@ -88,15 +88,20 @@ def _maybe_compute_target_returns(
     report_period: Optional[str],
     cur_total_shares: Optional[float],
     current_price: Optional[float],
-) -> Optional[List[Dict[str, Any]]]:
-    """计算「目标股息率反推市值」表的数据 rows。仅在关键字段齐备时返回。
+) -> Optional[Dict[str, Any]]:
+    """计算「目标股息率反推市值」表。关键字段齐备时返回完整 dict,否则 None。
 
-    用 ``compute_target_returns_table`` 查 DB 现存字段 —
-    per_share_dividend(capital_change_events)、total_shares(share_structure)、
-    current_price(stock_daily_price,展示用)。
+    返回结构(= ``compute_target_returns_table`` 的输出,缺字段时 None):
+        {
+            "rows": [ {dividend_yield_pct, implied_price, implied_market_cap_yi}, ... ],
+            "current_price": float | None,
+            "current_price_source": str | None,   # 取自哪张表
+            "current_price_date": str | None,     # 取价日期(ISO)
+            ...
+        }
 
-    返回 None 时 build_dividend_markdown 不渲染该 section,
-    避免半残数据误导读者。
+    仅在 per_share_dividend + total_shares 都齐时才返回 rows,
+    避免半残数据误导读者(``build_dividend_markdown`` 收到 None 就不渲染该 section)。
     """
     if not stock_code:
         return None
@@ -117,9 +122,38 @@ def _maybe_compute_target_returns(
         return None
     if not res["rows"]:
         return None
-    # 当前股价可用时,skill 端把其值传给 markdown 用于「当前价格」基线行;
-    # 这里不修改 res,仅辅助 caller 决定是否传入 target_returns_current_price
-    return res["rows"]
+    return res
+
+
+def _target_returns_kwargs(
+    res: Optional[Dict[str, Any]],
+    fallback_current_price: Optional[float],
+) -> Dict[str, Any]:
+    """把 ``compute_target_returns_table`` 的输出摊成 ``build_dividend_markdown`` 的 kwargs。
+
+    ``current_price`` 优先用 skill 自己从 ``market_data_tool`` 拿到的价
+    (那条链路优先 stock_market_snapshot 估值快照,与 dividend_yield 同源);
+    拿不到时退化到 ``compute_target_returns_table`` 内部查的价。
+    来源表名与取价日期始终来自 ``compute_target_returns_table`` 的查询结果。
+
+    res 为 None(关键字段缺失)时返回全 None,markdown 就不渲染该 section。
+    """
+    if not res or not res.get("rows"):
+        return {
+            "target_returns_table": None,
+            "target_returns_current_price": None,
+            "target_returns_current_price_source": None,
+            "target_returns_current_price_date": None,
+        }
+    price = fallback_current_price
+    if price is None:
+        price = res.get("current_price")
+    return {
+        "target_returns_table": res["rows"],
+        "target_returns_current_price": price,
+        "target_returns_current_price_source": res.get("current_price_source"),
+        "target_returns_current_price_date": res.get("current_price_date"),
+    }
 
 
 def run(
@@ -536,11 +570,16 @@ def run(
                     # 七、目标股息率反推市值(用户提交历史代码变更阶段新增)
                     # 用 compute_target_returns_table 查 DB 实算,缺关键字段时
                     # 整表跳过(在 build_dividend_markdown 内做 None-check)。
-                    target_returns_table=_maybe_compute_target_returns(
-                        stock_code, report_year, report_period,
-                        cur_total_shares, current_price,
+                    **_target_returns_kwargs(
+                        _maybe_compute_target_returns(
+                            stock_code, report_year, report_period,
+                            cur_total_shares, current_price,
+                        ),
+                        # markdown 的「当前价格」基线行优先用 skill 自己从
+                        # market_data_tool 拿到的价(带 PE/PB 的快照优先);
+                        # 拿不到时退化到 compute_target_returns_table 的价。
+                        current_price,
                     ),
-                    target_returns_current_price=current_price,
                 )
                 md_path.write_text(md_content, encoding="utf-8")
                 markdown_path = str(md_path)
