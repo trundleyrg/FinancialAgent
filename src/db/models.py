@@ -773,6 +773,10 @@ class CapitalChangeEvent(Model):
     allotment_ratio_per_10 = FloatField(null=True, help_text="每10股配股(股)")
     allotment_price = FloatField(null=True, help_text="配股价格(元/股)")
     allotment_shares = FloatField(null=True, help_text="实际配股数量(股)")
+    # 该权益分派对应的总股本(股),由公告 PDF 里"股权登记日总股本为 X 股"解析。
+    # dividend skill 用它把 (每10股派息 / 10) × total_shares 换算成申报分红总额;
+    # 缺失时回退到 share_structure 同年 total_shares。
+    total_shares = FloatField(null=True, help_text="该事件对应总股本(股)")
 
     source = CharField(max_length=32, null=False)
     scheme_description = CharField(max_length=512, null=True)

@@ -729,16 +729,32 @@ class PDFChapterExtractor:
         """
         import fitz as _fitz
         variants = self._section_title_variants(section_title)
-        # 章节标题往往出现在页面前 10 行(标题区),不要在正文 / 表格 cell 里命中
-        # (否则"对…合并资产负债表的影响"这种审计说明文本也会误匹)。整行精确
-        # 匹配容易漏"1、 合并资产负债表"这种带前缀的写法,因此采用 substring
-        # 但只看页面顶部几行。
-        HEADER_LINES_TO_CHECK = 10
+        # 判据:变体必须出现在「行的开头」(允许 "1、 " / "(一) " / "5." 等编号前缀),
+        # 而不是句中出现。理由:
+        #   - 真标题: "合并资产负债表" / "1、 合并资产负债表" / "(一)股份变动情况表"
+        #     → 去掉编号前缀后整行以变体开头 ✅
+        #   - 审计正文: "执行新收入准则对2020 年12 月31 日合并资产负债表的影响如下"
+        #     → 变体在句中,不是开头 ❌ 排除
+        # 这样就不需要限制只看前 N 行(报表章节标题可能出现在页面中部,
+        # 因为上一页的审计意见文字会把它挤到第 20+ 行),比固定行数更稳。
+        _NUM_PREFIX_RE = re.compile(
+            r'^(?:'
+            r'[（(]?[一二三四五六七八九十]+[）)]?[\s、.]*'   # 一、 (一) 一.
+            r'|[0-9]+[\s、.．]*'                            # 1、 1. 1．
+            r'|[（(][0-9一二三四五六七八九十]+[）)][\s、.]*'   # (1) （一）
+            r'|第[一二三四五六七八九十]+[章节部分]\s*'
+            r')'
+        )
+
+        def _is_heading_line(line: str) -> bool:
+            stripped = _NUM_PREFIX_RE.sub('', line).strip()
+            return any(stripped.startswith(v) for v in variants)
+
         start_page = None
         for page_idx in range(len(self.doc)):
             text = self.doc[page_idx].get_text()
-            lines = [l.strip() for l in text.split('\n') if l.strip()][:HEADER_LINES_TO_CHECK]
-            if any(any(v in l for v in variants) for l in lines):
+            lines = [l.strip() for l in text.split('\n') if l.strip()]
+            if any(_is_heading_line(l) for l in lines):
                 start_page = page_idx
                 break
         if start_page is None:
