@@ -446,7 +446,30 @@ def compare_and_generate_report(pdf_dir, output_path):
 
 
 if __name__ == '__main__':
-    pdf_dir = './data/000423'
-    output_path = './data/pdf_db_comparison_report.xlsx'
-    result = compare_and_generate_report(pdf_dir, output_path)
+    import argparse
+
+    _parser = argparse.ArgumentParser(
+        description="对比 data/{stock}/ 下的 PDF 与 DuckDB 数据是否一致",
+    )
+    _parser.add_argument(
+        "pdf_dir", nargs="?", default=None,
+        help="PDF 目录,默认 data/{stock_code}/(需配合 --stock-code)",
+    )
+    _parser.add_argument(
+        "--stock-code", default=None,
+        help="股票代码,用于推导默认 PDF 目录(如 600285 → ./data/600285)",
+    )
+    _parser.add_argument(
+        "-o", "--output", default='./data/pdf_db_comparison_report.xlsx',
+        help="Excel 报告输出路径",
+    )
+    _args = _parser.parse_args()
+
+    _pdf_dir = _args.pdf_dir
+    if not _pdf_dir:
+        if not _args.stock_code:
+            _parser.error("请提供 PDF 目录,或用 --stock-code 让脚本推导 data/{stock_code}/")
+        _pdf_dir = f'./data/{_args.stock_code}'
+
+    result = compare_and_generate_report(_pdf_dir, _args.output)
     print(f"\n完成! 共发现 {len(result)} 个不一致项")

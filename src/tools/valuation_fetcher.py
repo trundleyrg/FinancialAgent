@@ -6,7 +6,7 @@ dividend skill 早期用 ``ak.stock_zh_valuation_baidu``(百度股市通)取 PE/
 2026-09 起该接口频繁 RemoteDisconnected,导致估值段长期 N/A。
 
 ``ak.stock_value_em``(东财个股估值)是另一条链路,实测可用:
-单次调用即返回全历史,实测 600285 有 2134 行(2000 年上市至今),
+单次调用即返回该股**全历史**(老股可达 2000+ 个交易日),
 列含:
 
     数据日期 / 当日收盘价 / 总市值 / 总股本 /
@@ -339,9 +339,11 @@ def compute_valuation_percentile(
                    "max": float|None, "median": float|None,
                    "count": int}}``,无数据的字段不出现。
 
-    示例(600285 2026-10-22,近 243 个交易日):
+    示例(某医药股,近 243 个交易日):
         PE 14.92 → 28.0% 分位(历史区间 13.55~16.88)
         PB  3.60 → 53.9% 分位(历史区间  3.01~4.12)
+
+    解读:28% 分位 = 历史上 72% 的时间 PE 比现在高,即相对便宜。
     """
     out: Dict[str, Dict[str, Any]] = {}
     for field in ("pe_ratio", "pb_ratio"):

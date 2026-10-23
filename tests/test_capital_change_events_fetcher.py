@@ -254,3 +254,97 @@ def test_fetch_allotment_zero_price_yields_none():
     with _patch_ak(fx):
         events = fetch_capital_change_events("000423")
     assert events[0]["allotment_price"] is None
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# persist_dividend_to_db:company_name 不能写空串
+# ──────────────────────────────────────────────────────────────────────────────
+#
+# 历史问题:INSERT 的 company_name 位置硬编码 '' —— 同一公司在
+# consolidated_balance_sheet 里是「河南羚锐制药股份有限公司」,在
+# capital_change_events 里却是 ''。任何按 company_name 查分红事件的
+# 逻辑都会漏掉这批数据。
+
+
+def test_persist_uses_provided_company_name():
+    """显式传入 company_name 时,INSERT 应写入该值。"""
+    from unittest.mock import MagicMock as _M, patch as _p
+    from src.tools import download_cninfo_reports as mod
+
+    fake_conn = _M()
+    # share_structure 查询 → 空;去重查询 → None(未存在)
+    fake_conn.execute.return_value.fetchall.return_value = []
+    fake_conn.execute.return_value.fetchone.return_value = None
+
+    with _p("src.db.db_connector.get_db") as _gd:
+        _gd.return_value._duckdb_conn = fake_conn
+        events = [{
+            "report_year": 2024,
+            "cash_per_10_shares": 9.0,
+            "total_shares": 567_143_992,
+            "event_date": "2025-06-01",
+            "announcement_title": "2024年年度权益分派实施公告",
+        }]
+        inserted = mod.persist_dividend_to_db(
+            "600285", events, source="cninfo",
+            company_name="河南羚锐制药股份有限公司",
+        )
+
+    assert inserted == 1
+    # 找到 INSERT 语句的调用,检查参数里 company_name 不是空串
+    insert_calls = [
+        c for c in fake_conn.execute.call_args_list
+        if isinstance(c[0][0], str) and "INSERT INTO capital_change_events" in c[0][0]
+    ]
+    assert insert_calls, "应执行过 INSERT"
+    params = insert_calls[0][0][1]
+    assert "河南羚锐制药股份有限公司" in params, (
+        f"company_name 应写入真实公司名,实际 params={params}"
+    )
+
+
+def test_persist_derives_company_name_from_db_when_not_given():
+    """未传 company_name 时,从已入库的财报表反查(而不是写空串)。"""
+    from unittest.mock import MagicMock as _M, patch as _p
+    from src.tools import download_cninfo_reports as mod
+
+    fake_conn = _M()
+
+    def _execute(sql, params=None):
+        # share_structure 查询
+        if "share_structure" in sql:
+            r = _M()
+            r.fetchall.return_value = []
+            return r
+        # company_name 反查(consolidated_balance_sheet)
+        if "consolidated_balance_sheet" in sql:
+            r = _M()
+            r.fetchone.return_value = ("河南羚锐制药股份有限公司",)
+            return r
+        # 去重查询
+        r = _M()
+        r.fetchone.return_value = None
+        return r
+
+    fake_conn.execute.side_effect = _execute
+
+    with _p("src.db.db_connector.get_db") as _gd:
+        _gd.return_value._duckdb_conn = fake_conn
+        events = [{
+            "report_year": 2024,
+            "cash_per_10_shares": 9.0,
+            "event_date": "2025-06-01",
+        }]
+        inserted = mod.persist_dividend_to_db("600285", events, source="cninfo")
+
+    assert inserted == 1
+    insert_calls = [
+        c for c in fake_conn.execute.call_args_list
+        if isinstance(c[0][0], str) and "INSERT INTO capital_change_events" in c[0][0]
+    ]
+    assert insert_calls
+    params = insert_calls[0][0][1]
+    assert "河南羚锐制药股份有限公司" in params, (
+        f"未传时应从 DB 反查公司名,实际 params={params}"
+    )
+    assert "" not in params[:1], "company_name 不应为空串"

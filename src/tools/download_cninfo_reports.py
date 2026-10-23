@@ -550,6 +550,7 @@ def persist_dividend_to_db(
     stock_code: str,
     events: list[dict],
     source: str = "cninfo",
+    company_name: str | None = None,
 ) -> int:
     """把分红事件列表持久化到 capital_change_events 表。
 
@@ -559,11 +560,29 @@ def persist_dividend_to_db(
                   'cash_per_share': float, 'total_shares': int|None,
                   'event_date': str|None, 'announcement_title': str|None}]
         source: 数据来源标识
+        company_name: 公司全称。缺省时从已入库的财报表按 stock_code 反查;
+            查不到才退化为 ''。**不要**把 stock_code 塞进 company_name ——
+            那是两个不同语义的字段,混用会让按公司名的查询查不到分红事件。
     Returns:
         新插入的记录数(同 (stock_code, report_year, event_type) 已存在则跳过)
     """
     from src.db.db_connector import get_db
     db = get_db()
+
+    # company_name 缺省时按 stock_code 从财报表反查(财报表由 PDF 解析写入,
+    # 是公司全称最可靠的来源)。查不到再退化为空串。
+    if not company_name:
+        try:
+            row = db._duckdb_conn.execute(
+                "SELECT company_name FROM consolidated_balance_sheet "
+                "WHERE stock_code=? AND company_name IS NOT NULL "
+                "AND company_name<>'' "
+                "ORDER BY report_year DESC LIMIT 1",
+                [stock_code],
+            ).fetchone()
+        except Exception:
+            row = None
+        company_name = (row[0] if row and row[0] else "") or ""
 
     # 取 share_structure 表里已有的总股本(每年)
     share_by_year: dict[int, int] = {}
@@ -603,7 +622,7 @@ def persist_dividend_to_db(
             " event_type, event_date, cash_per_10_shares, total_shares, "
             " source, scheme_description) "
             "VALUES (?, ?, ?, 'FY', 'cash_dividend', ?, ?, ?, ?, ?)",
-            ['', stock_code, ry, ev.get('event_date') or '1900-01-01',
+            [company_name, stock_code, ry, ev.get('event_date') or '1900-01-01',
              cps10 or 0.0, total_shares, source, scheme],
         )
         inserted += 1
