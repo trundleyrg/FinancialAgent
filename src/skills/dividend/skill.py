@@ -197,6 +197,9 @@ def run(
             company_name=company_name,
             year=report_year,
             period=report_period,
+            # stock_code 是稳定主键;只传 company_name 时,公司改名 /
+            # 简称不一致 / 上游误传代码都会查不到数据 → 误报「财务数据为空」
+            stock_code=stock_code,
         )
 
         # 1a. fail-fast:3 张表全空(PDF 解析失败 / 数据未入库)时直接
@@ -229,6 +232,8 @@ def run(
                 start_year=report_year - (years_window - 1),
                 end_year=report_year,
                 period=report_period or "FY",
+                # 同上:用稳定主键寻址,不用可变的 company_name
+                stock_code=stock_code,
             )
             for y, stmts in multi_year_raw.items():
                 inc = stmts.get("consolidated_income_statement") or {}
