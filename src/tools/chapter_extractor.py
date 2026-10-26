@@ -6,7 +6,7 @@ chapter_extractor.py     # 负责识别和提取 PDF 指定章节
 """
 import re
 import fitz  # PyMuPDF
-from typing import List, Tuple, Dict, Optional
+from typing import Any, List, Tuple, Dict, Optional
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from functools import partial
 import os
@@ -418,10 +418,95 @@ class PDFChapterExtractor:
 
     def merge_table_data(self, main_table: List[List[str]],
                         continuation_table: List[List[str]]) -> List[List[str]]:
+        """合并跨页表格数据（跳过续表的表头行）。
+
+        续页常重复表头（"项目 | 附注 | 2024 年度 | 2023 年度"）。
+        直接拼接会让表内出现两行表头,后续按行序解析时数据整体错位一行。
+        这里把续表开头的重复表头去掉。
+
+        识别方式:续表首行首格是 "项目"/"科目" 等表头标签 —— 真正的数据行
+        不会以这些词开头。
         """
-        合并跨页表格数据（跳过续表的表头行）
+        if not continuation_table:
+            return list(main_table)
+        first = continuation_table[0]
+        first_label = str(first[0] or "").replace("\n", "").strip() if first else ""
+        if first_label in ("项目", "科目"):
+            return list(main_table) + list(continuation_table[1:])
+        return list(main_table) + list(continuation_table)
+
+    # 主要报表名关键词。按长度降序匹配,保证「合并利润表」不会被「利润表」抢先,
+    # 「合并所有者权益变动表」不会被「所有者权益变动表」抢先。
+    _STATEMENT_KEYWORDS = (
+        "合并所有者权益变动表", "母公司所有者权益变动表",
+        "合并股东权益变动表", "母公司股东权益变动表",
+        "合并资产负债表", "母公司资产负债表",
+        "合并利润表", "母公司利润表",
+        "合并现金流量表", "母公司现金流量表",
+        "合并综合收益表", "母公司综合收益表",
+    )
+
+    # 各主要报表的「第一个小节标题」—— 它只可能出现在报表开头,
+    # 续页不可能从它开始(续页顶多是「二、xxx」或普通数据行)。
+    # 用于在 header 无报表名时判定"下一张表是新报表"。
+    _STATEMENT_FIRST_SECTION = (
+        # 利润表:一、营业总收入(合并) / 一、营业收入(母公司)
+        re.compile(r"^一[、.]\s*(营业总收入|营业收入)"),
+        # 现金流量表:一、经营活动产生的现金流量：
+        re.compile(r"^一[、.]\s*经营活动产生的现金流"),
+        # 资产负债表:首个分类「流动资产：」/「资产：」(母公司老版)。
+        # 注意排除「非流动资产：」—— 那是资产负债表的**第二个**分类,
+        # 出现在表内中段,不是报表起点。
+        re.compile(r"^(?:流动资产|资产)[：:]"),
+    )
+
+    @classmethod
+    def _detect_statement_kind(cls, header: str) -> Optional[str]:
+        """从表头文本里识别所属报表名,识别不出返回 None。
+
+        支持 A 股年报常见的两种写法:
+          带 TOC 编号:  "3、合并利润表" / "4、母公司利润表"
+          裸标题:      "合并利润表" / "母公司利润表"
+
+        两者都靠「包含报表名关键词」判定,编号前缀自然被包含。
         """
-        return main_table + continuation_table
+        if not header:
+            return None
+        for kw in cls._STATEMENT_KEYWORDS:
+            if kw in header:
+                return kw
+        return None
+
+    @classmethod
+    def _is_statement_start_row(cls, rows: Any) -> bool:
+        """判断表的首个数据行是否是某报表的**第一个小节标题**。
+
+        用于表头无报表名时的兜底判定:若下一张表从「一、营业总收入」这种
+        顶级小节开始,说明它是**新报表**而非当前报表的续页,不能拼接。
+
+        参数两种形态都支持:
+          - 整张表的多行数据 ``[["一、营业总收入", "", ...], ...]``
+          - 单行 ``["一、营业总收入", "", ...]``
+
+        会跳过开头的重复表头行(首格为 "项目"/"科目")。
+        """
+        if not rows:
+            return False
+        # 单行形态:第一格就是字符串
+        if isinstance(rows[0], str):
+            candidates = [rows]
+        else:
+            candidates = list(rows)[:3]
+        for row in candidates:
+            if not row:
+                continue
+            label = str(row[0] or "").replace("\n", "").strip()
+            if not label:
+                continue
+            if label in ("项目", "科目"):
+                continue  # 重复表头,继续看下一行
+            return any(p.match(label) for p in cls._STATEMENT_FIRST_SECTION)
+        return False
 
     @staticmethod
     def _header_indicates_other_statement(
@@ -430,42 +515,20 @@ class PDFChapterExtractor:
         """判断 next_header 是否提示这是另一张报表的起点（不同于 current_header 所属报表）。
 
         用于跨页合并时避免把后续报表的起点表格错误地拼接到当前报表尾部。
+
+        注意:不能只靠 header —— 很多 PDF 的表头只是 "2024 年1—12 月|单位：元"
+        这种抬头,不含报表名,此时由调用方用表内容兜底判定
+        (见 ``_is_statement_start_row``)。
         """
         if not next_header:
             return False
 
-        # 主要报表标题前缀（带 TOC 编号）
-        prefixes = [
-            ("1、合并资产负债表",),
-            ("2、母公司资产负债表",),
-            ("3、合并利润表",),
-            ("4、母公司利润表",),
-            ("5、合并现金流量表",),
-            ("6、母公司现金流量表",),
-        ]
-
-        # 先找 next 属于哪一张报表（按前缀）
-        next_stmt = None
-        for grp in prefixes:
-            for kw in grp:
-                if kw in next_header:
-                    next_stmt = grp[0]
-                    break
-            if next_stmt:
-                break
-
+        next_stmt = PDFChapterExtractor._detect_statement_kind(next_header)
         if next_stmt is None:
             return False  # 没识别出报表标题，可能只是页眉，继续按物理位置合并判断
 
-        # 找 current 属于哪一张报表
-        current_stmt = None
-        for grp in prefixes:
-            for kw in grp:
-                if kw in current_header:
-                    current_stmt = grp[0]
-                    break
-            if current_stmt:
-                break
+        current_stmt = PDFChapterExtractor._detect_statement_kind(current_header)
+
 
         # 如果 current 未识别出报表标题，退化为：只要 next 标识为新报表起点就拒绝合并
         if current_stmt is None:
@@ -511,6 +574,12 @@ class PDFChapterExtractor:
                     next_tab.header_text, current.header_text
                 ):
                     break
+                # 兜底：表头可能只是 "2024 年1—12 月|单位：元" 这种抬头，不含报表名
+                # (600285 版式)，此时用**表内容**判定 —— 若下一张表从某个报表的
+                # 第一个顶级小节开始（一、营业总收入 / 一、经营活动产生的现金流量：/
+                # 流动资产：），它就是**新报表**而非当前报表的续页，不能拼接。
+                if self._is_statement_start_row(next_tab.table_data):
+                    break
                 # 检查合并条件
                 page1_h = self.page_heights[current.page_start_num + (j - i - 1)]
                 page2_h = self.page_heights[next_tab.page_start_num]
@@ -521,8 +590,19 @@ class PDFChapterExtractor:
                      "col_count": len(next_tab.table_data[0]) if next_tab.table_data else 0},
                     page1_h, page2_h
                 ):
-                    # 合并数据
-                    current.table_data += next_tab.table_data
+                    # 列数必须完全一致 —— 容差 ±1 会让两表行宽不同,
+                    # 拼接后 DataFrame 补 None 导致列错位。
+                    cur_cols = len(current.table_data[0]) if current.table_data else 0
+                    next_cols = len(next_tab.table_data[0]) if next_tab.table_data else 0
+                    if cur_cols and next_cols and cur_cols != next_cols:
+                        chapter_logger.debug(
+                            "跨页合并跳过:列数不同 current=%d next=%d", cur_cols, next_cols,
+                        )
+                        break
+                    # 合并数据（跳过续页重复表头）
+                    current.table_data = self.merge_table_data(
+                        current.table_data, next_tab.table_data,
+                    )
                     current.page_end_num = next_tab.page_end_num  # 更新结束页码
                     current.bbox = (
                         min(current.bbox[0], next_tab.bbox[0]),
