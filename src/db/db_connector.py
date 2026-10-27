@@ -290,6 +290,31 @@ class DuckDBModelAdapter:
         return len(rows)
 
 
+def _is_lock_conflict(exc: Exception) -> bool:
+    """判断异常是否为 DuckDB 的**并发锁冲突**(而非文件损坏)。
+
+    DuckDB 是单写者锁的文件数据库,并发访问时后到的进程会拿到:
+
+        IO Error: Could not set lock on file "...":
+        Conflicting lock is held in ... (PID 12345) by user ...
+
+    这时文件**完全正常**,只是被别的进程占着。此前 _init_duckdb 把所有
+    连接异常都当"文件损坏"→ 删库重建,导致任何并发访问都会静默清空
+    数据库(实测丢过一整轮 pipeline 写入的财报数据,而 pipeline 仍 exit 0)。
+
+    判据:异常类型是 duckdb.IOException / OSError,且信息里含 lock 相关词。
+    """
+    msg = str(exc).lower()
+    if "lock" not in msg:
+        return False
+    # 明确提到冲突 / 无法加锁才算锁冲突
+    return any(
+        kw in msg
+        for kw in ("conflicting lock", "could not set lock", "lock is held",
+                   "already open", "database is locked")
+    )
+
+
 class DatabaseConnector:
     """数据库连接器，提供增删查改操作，支持 PostgreSQL 和 DuckDB"""
 
@@ -352,6 +377,16 @@ class DatabaseConnector:
                 test_conn.execute("SELECT 1")
                 test_conn.close()
             except Exception as e:
+                # 锁冲突 ≠ 文件损坏 —— 前者文件完好,只是被别的进程占着。
+                # 绝不能在这里删库(会静默清空所有数据)。直接抛出让调用方
+                # 等待/重试,或改用别的 DUCKDB_DB_PATH。
+                if _is_lock_conflict(e):
+                    raise RuntimeError(
+                        f"数据库被其它进程占用(并发锁冲突),未做任何改动: {e}\n"
+                        f"  文件: {database_url}\n"
+                        f"  提示: DuckDB 是单写者锁,请等待其它进程结束后再试,"
+                        f"或用 DUCKDB_DB_PATH 指向另一个库。"
+                    ) from e
                 db_logger.warning(f"数据库文件损坏，正在重新创建: {e}")
                 os.remove(database_url)
                 wal_file = database_url + ".wal"

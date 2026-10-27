@@ -2,18 +2,22 @@
 FinancialAgent 统一入口
 
 支持完整流程:
-  1. download — 从巨潮资讯网下载指定股票的年度报告 PDF
-  2. parse    — 用 PDFChapterExtractor 提取主要财务表格
-  3. persist  — 写入 DuckDB(consolidated_balance_sheet / income_statement / cash_flow_statement / share_structure)
-  4. dividend — 跑红利股分析,产出 markdown 报告 + CSV 趋势 + 负债结构图
-  5. 分红公告 — 巨潮搜「权益分派」公告 + 解析 PDF 派息额 + 入库到 capital_change_events
+  1. download  — 从巨潮资讯网下载指定股票的年度报告 PDF
+  2. parse     — 用 PDFChapterExtractor 提取主要财务表格
+  3. persist   — 写入 DuckDB(consolidated_balance_sheet / income_statement / cash_flow_statement / share_structure)
+  4. 分红事件   — 巨潮搜「权益分派」公告 + 解析 PDF 派息额 + 入库 capital_change_events
+  5. dividend  — 跑红利股分析,产出 markdown 报告 + CSV 趋势 + 负债结构图
+
+`run` 的完整流水线:download → parse/persist → 分红事件刷新 → analyze
+(分红事件是 dividend skill 算「连续分红年限」「分红率」的唯一数据源,
+ 漏掉会静默降级而不报错,所以由 pipeline 自动触发;仍可用独立命令单独重跑。)
 
 命令:
   python main.py download <code> [year ...]       只下载年报
   python main.py parse <pdf_path>                  只解析
   python main.py analyze <code> [year]            跑红利分析(假设已入库)
-  python main.py run <code> [year ...]            完整流程 download→parse→analyze
-  python main.py dividend <code> [year ...]        拉取分红派息公告 + 入库
+  python main.py run <code> [year ...]            完整流程 download→parse→分红→analyze
+  python main.py dividend <code> [year ...]        只刷新分红派息公告(可独立重跑)
   python main.py batch <file>                     批量处理(file 每行: code year)
 
 默认参数:
@@ -208,13 +212,47 @@ def run_dividend_analysis(
     return delta
 
 
+def refresh_dividend_events(stock_code: str, years: list[int]) -> int:
+    """Step 4:拉取巨潮「权益分派」公告 → 解析派息额 → 入库 capital_change_events。
+
+    为什么是独立 stage 而不是并进 PDF 解析:
+      - 数据源不同 —— 年报里是**预案**(董事会拟订,股东大会未通过),
+        权益分派实施公告才是**实际执行**方案,且只有后者有
+        股权登记日 / 除权除息日 / 实际派发金额。
+      - capital_change_events 的 event_date / ex_date / record_date /
+        payment_date 四个日期字段只有实施公告给得出准确值。
+      - 职责分离 —— 分红是「资本事件」域,与三大报表解析解耦,
+        可独立重跑刷新(如补历史年份、补方案变更)。
+
+    但它必须被 pipeline 自动触发:capital_change_events 是 dividend skill
+    算「连续分红年限」「分红率」的唯一数据源,漏掉这步就会静默降级
+    (连续分红年限=0、分红率 N/A),而 pipeline 本身仍 exit 0 —— 很难察觉。
+
+    Returns:
+        入库的事件条数;失败返回 0(不抛异常,由调用方决定是否阻断)。
+    """
+    main_logger.info("=" * 70)
+    main_logger.info("Step 4 / Refresh dividend events: %s %s", stock_code, years)
+    main_logger.info("=" * 70)
+    try:
+        from src.tools.download_cninfo_reports import (
+            query_dividend_announcements_and_persist,
+        )
+        events = query_dividend_announcements_and_persist(stock_code, years)
+        main_logger.info("分红事件入库完成: %d 条", len(events or []))
+        return len(events or [])
+    except Exception as exc:
+        main_logger.warning("分红事件刷新失败(不阻断后续分析): %s", exc)
+        return 0
+
+
 def full_pipeline(
     stock_code: str,
     years: list[int],
     *,
     trend_years: int = 5,
 ) -> None:
-    """完整流程:download → parse → analyze。
+    """完整流程:download → parse → 分红事件刷新 → analyze。
 
     任何一步失败都不阻塞后续步骤(降级策略)。
     """
@@ -225,6 +263,16 @@ def full_pipeline(
             parse_pdf_to_db(pdf_path)
         except Exception as exc:
             main_logger.error("解析/入库失败(%s): %s", pdf_path.name, exc)
+
+    # 分红事件刷新(独立 stage,失败不阻断)—— 必须在分析之前,
+    # 否则 dividend skill 会因缺 capital_change_events 而静默降级。
+    # 这里再兜一层异常:即便 refresh_dividend_events 自身不吞异常
+    #(或被替换成会抛错的实现),也不应让整条 pipeline 挂掉。
+    if years:
+        try:
+            refresh_dividend_events(stock_code, years)
+        except Exception as exc:
+            main_logger.warning("分红事件刷新异常(不阻断后续分析): %s", exc)
 
     # 红利分析(对最新 year)
     if years:
@@ -265,12 +313,9 @@ def main():
     elif cmd == "dividend":
         # python main.py dividend 600285 2020 2021 2022 2023 2024
         # 拉取巨潮「权益分派」公告 + 解析 PDF 派息额 + 入库 capital_change_events
-        from src.tools.download_cninfo_reports import (
-            query_dividend_announcements_and_persist,
-        )
         code = sys.argv[2] if len(sys.argv) > 2 else DEFAULT_CODE
         years = [int(y) for y in sys.argv[3:]] if len(sys.argv) > 3 else [DEFAULT_YEAR]
-        query_dividend_announcements_and_persist(code, years)
+        refresh_dividend_events(code, years)
 
     elif cmd == "run":
         # python main.py run 600285 2024 2023

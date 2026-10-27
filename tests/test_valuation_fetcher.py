@@ -289,3 +289,68 @@ def test_compute_valuation_percentile_empty_history():
 
     assert compute_valuation_percentile({}, {"pe_ratio": 14.0}) == {}
     assert compute_valuation_percentile({"pb_ratio": []}, {"pb_ratio": 1.0}) == {}
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 日线降级:stock_zh_a_hist 断连时用 stock_value_em 的收盘价兜底
+# ──────────────────────────────────────────────────────────────────────────────
+#
+# 背景:东财日线接口 ak.stock_zh_a_hist 与雪球/百度一样,2026-09 起
+# 频繁 RemoteDisconnected。但 ak.stock_value_em(同供应商东财)可用,
+# 且它本身就返回「数据日期 + 当日收盘价」—— 足够支撑 dividend skill
+# 的 current_price → dividend_yield 计算。
+
+
+def test_fetch_daily_prices_falls_back_to_value_em():
+    """stock_zh_a_hist 断连 → 退化用 stock_value_em 的收盘价。"""
+    from src.tools.stock_daily_price_fetcher import fetch_daily_prices
+
+    hist_df = pd.DataFrame({
+        "日期": ["2026-10-20", "2026-10-21"],
+        "开盘": [21.0, 20.5], "收盘": [21.18, 20.65],
+        "最高": [21.5, 21.0], "最低": [20.8, 20.3], "成交量": [100.0, 200.0],
+    })
+    value_df = pd.DataFrame({
+        "数据日期": ["2026-10-21"],
+        "当日收盘价": [20.65],
+        "总市值": [1.1e10],
+    })
+
+    def fake_hist(**kw):
+        raise ConnectionError("RemoteDisconnected")
+
+    with patch("akshare.stock_zh_a_hist", side_effect=fake_hist), \
+         patch("akshare.stock_value_em", return_value=value_df):
+        rows = fetch_daily_prices("600285")
+
+    assert len(rows) == 1, f"应退化取到 1 行,实际 {rows}"
+    r = rows[0]
+    assert r["close_price"] == pytest.approx(20.65)
+    # 降级源没有 OHLC / 成交量 → 应为 None 而不是编造
+    assert r["open_price"] is None
+    assert r["high_price"] is None
+    assert r["low_price"] is None
+    assert r["volume"] is None
+    assert r["source"] == "akshare_value_em"
+
+
+def test_fetch_daily_prices_prefers_hist_when_available():
+    """stock_zh_a_hist 可用时优先用它(有完整 OHLCV)。"""
+    from src.tools.stock_daily_price_fetcher import fetch_daily_prices
+
+    hist_df = pd.DataFrame({
+        "日期": ["2026-10-21"],
+        "开盘": [21.0], "收盘": [20.65],
+        "最高": [21.5], "最低": [20.3], "成交量": [200.0],
+    })
+    value_df = pd.DataFrame({
+        "数据日期": ["2026-10-21"], "当日收盘价": [999.99],
+    })
+
+    with patch("akshare.stock_zh_a_hist", return_value=hist_df), \
+         patch("akshare.stock_value_em", return_value=value_df) as spy:
+        rows = fetch_daily_prices("600285")
+
+    assert rows[0]["close_price"] == pytest.approx(20.65), "应优先用日线接口"
+    assert rows[0]["volume"] == pytest.approx(200.0)
+    assert spy.call_count == 0, "日线接口可用时不应再打估值接口"

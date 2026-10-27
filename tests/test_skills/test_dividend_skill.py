@@ -2361,3 +2361,76 @@ def test_build_dividend_markdown_valuation_percentile_optional():
     assert "分位" not in val_section.split("---")[0], (
         "无分位数据时不应渲染分位行"
     )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# main.full_pipeline 的分红事件 stage
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def test_full_pipeline_refreshes_dividend_events(monkeypatch):
+    """full_pipeline 必须在 parse 之后、analyze 之前自动刷新分红事件。
+
+    背景:分红事件(capital_change_events)是 dividend skill 算
+    「连续分红年限」「分红率」的唯一数据源。此前只有独立的
+    `main.py dividend` 命令会拉,跑 `main.py run` 的人(以及清库重建后)
+    很容易漏掉这一步 → dividend_stability_years=0。
+    """
+    import main as main_mod
+
+    calls: list[str] = []
+
+    monkeypatch.setattr(
+        main_mod, "download_annual_reports",
+        lambda code, years: [],
+    )
+    monkeypatch.setattr(
+        main_mod, "parse_pdf_to_db",
+        lambda pdf: calls.append("parse") or {},
+    )
+    monkeypatch.setattr(
+        main_mod, "run_dividend_analysis",
+        lambda code, year, **kw: calls.append("analyze"),
+    )
+    monkeypatch.setattr(
+        main_mod, "refresh_dividend_events",
+        lambda code, years: calls.append("dividend") or 0,
+    )
+
+    main_mod.full_pipeline("600285", [2020, 2021, 2022, 2023, 2024])
+
+    assert "dividend" in calls, "full_pipeline 应自动刷新分红事件"
+    # 顺序:dividend 必须在 analyze 之前(分析要用分红数据)
+    assert calls.index("dividend") < calls.index("analyze"), (
+        f"分红事件必须在分析之前刷新,实际顺序 {calls}"
+    )
+
+
+def test_full_pipeline_continues_when_dividend_refresh_fails(monkeypatch):
+    """分红事件拉取失败(网络问题)不阻断后续分析。"""
+    import main as main_mod
+
+    calls: list[str] = []
+
+    monkeypatch.setattr(main_mod, "download_annual_reports", lambda c, y: [])
+    monkeypatch.setattr(main_mod, "parse_pdf_to_db", lambda p: calls.append("parse") or {})
+
+    def _boom(code, years):
+        raise ConnectionError("巨潮断连")
+    monkeypatch.setattr(main_mod, "refresh_dividend_events", _boom)
+    monkeypatch.setattr(
+        main_mod, "run_dividend_analysis",
+        lambda code, year, **kw: calls.append("analyze"),
+    )
+
+    # 不应抛异常
+    main_mod.full_pipeline("600285", [2020, 2021, 2022, 2023, 2024])
+    assert "analyze" in calls, "分红拉取失败后仍应继续分析"
+
+
+def test_refresh_dividend_events_is_callable():
+    """main 模块暴露 refresh_dividend_events,供 pipeline 与 CLI 复用。"""
+    import main as main_mod
+    assert callable(getattr(main_mod, "refresh_dividend_events", None)), (
+        "main 应提供 refresh_dividend_events"
+    )

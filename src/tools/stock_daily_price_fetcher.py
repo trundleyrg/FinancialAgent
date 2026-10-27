@@ -78,6 +78,38 @@ def _fetch_daily_prices_from_akshare(
     return df
 
 
+def _fetch_closes_from_value_em(
+    stock_code: str,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+) -> Optional[pd.DataFrame]:
+    """降级源:从 ``ak.stock_value_em`` 取「日期 + 收盘价」。
+
+    东财日线接口 ``stock_zh_a_hist`` 与雪球/百度一样,2026-09 起频繁
+    RemoteDisconnected。但同供应商的 ``stock_value_em`` 可用,且它本身就
+    返回「数据日期 + 当日收盘价」—— 足够支撑 dividend skill 的
+    current_price → dividend_yield 计算。
+
+    注意:该源**没有**开盘/最高/最低/成交量,那些字段降级为 None
+    (不编造数据)。要完整 OHLCV 仍需 ``stock_zh_a_hist``。
+    """
+    code = _normalize_code(stock_code)
+    try:
+        df = ak.stock_value_em(symbol=code)
+    except Exception as exc:
+        logger.warning("stock_value_em 降级拉取失败 %s: %s", code, exc)
+        return None
+    if df is None or df.empty:
+        return None
+    date_col = next((c for c in df.columns if c in ("数据日期", "日期")), None)
+    close_col = next((c for c in df.columns if c in ("当日收盘价", "收盘价", "收盘")), None)
+    if not (date_col and close_col):
+        return None
+    out = df[[date_col, close_col]].copy()
+    out.columns = ["日期", "收盘"]
+    return out
+
+
 def fetch_daily_prices(
     stock_code: str,
     start_date: Optional[str] = None,
@@ -86,12 +118,21 @@ def fetch_daily_prices(
 ) -> List[Dict[str, Any]]:
     """拉日线(纯函数,不落库)。
 
-    返回 [{trade_date, open, high, low, close, volume}],已是 DuckDB 友好的
-    Python 原生类型。
+    返回 [{trade_date, open, high, low, close, volume, source}],已是
+    DuckDB 友好的 Python 原生类型。
+
+    数据源优先级:
+      1. ``stock_zh_a_hist``(东财日线)—— 完整 OHLCV
+      2. ``stock_value_em``(东财个股估值)—— 断连时的降级,只有收盘价
     """
     df = _fetch_daily_prices_from_akshare(stock_code, start_date, end_date, adjust)
+    source = "akshare_hist"
     if df is None:
-        return []
+        # 降级:日线接口断连 → 用估值接口的收盘价
+        df = _fetch_closes_from_value_em(stock_code, start_date, end_date)
+        source = "akshare_value_em"
+        if df is None:
+            return []
     # 列名因 akshare 版本可能略有差异,容错
     date_col = next((c for c in df.columns if c in ("日期", "date")), None)
     open_col = next((c for c in df.columns if c in ("开盘", "开盘价")), None)
@@ -135,6 +176,7 @@ def fetch_daily_prices(
             "low_price": _f(low_col),
             "close_price": _f(close_col),
             "volume": _f(vol_col),
+            "source": source,
         })
     return out
 
@@ -170,6 +212,8 @@ def save_daily_prices(
     updated = 0
     for p in prices:
         td_str = str(p["trade_date"])
+        # 每行可能来自不同源(完整日线 vs 估值接口降级),优先用行内 source
+        row_source = p.get("source") or source
         if td_str in existing_dates:
             conn.execute(
                 "UPDATE stock_daily_price SET "
@@ -178,7 +222,7 @@ def save_daily_prices(
                 "WHERE stock_code=? AND trade_date=?",
                 [
                     p.get("open_price"), p.get("high_price"), p.get("low_price"),
-                    p.get("close_price"), p.get("volume"), source,
+                    p.get("close_price"), p.get("volume"), row_source,
                     code, p["trade_date"],
                 ],
             )
@@ -192,7 +236,7 @@ def save_daily_prices(
                 [
                     code, p["trade_date"],
                     p.get("open_price"), p.get("high_price"), p.get("low_price"),
-                    p.get("close_price"), p.get("volume"), source,
+                    p.get("close_price"), p.get("volume"), row_source,
                 ],
             )
             inserted += 1
