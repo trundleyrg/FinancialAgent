@@ -777,6 +777,14 @@ class CapitalChangeEvent(Model):
     # dividend skill 用它把 (每10股派息 / 10) × total_shares 换算成申报分红总额;
     # 缺失时回退到 share_structure 同年 total_shares。
     total_shares = FloatField(null=True, help_text="该事件对应总股本(股)")
+    # 公告直接披露的「现金分红总额」(元)—— 分红率的**权威分子**。
+    # 不能用「每10股派息 × 年末总股本」反推:公告的每10股派息是按
+    # *参与分配股数*(总股本剔除回购专户后)折算的,与 share_structure 的
+    # 年末总股本口径不同,反推会系统性偏大(东阿阿胶 2020-2022 偏大 1.56%)。
+    cash_dividend_total = FloatField(null=True, help_text="公告披露的现金分红总额(元)")
+    # 分配性质:annual(年度分配) / interim(半年度分配)。
+    # 同一年内可能既有年度分配又有半年度分配,两者都要入库、累加成分子。
+    dividend_kind = CharField(max_length=16, null=True, help_text="分配性质:annual/interim")
 
     source = CharField(max_length=32, null=False)
     scheme_description = CharField(max_length=512, null=True)

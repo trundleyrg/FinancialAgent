@@ -321,7 +321,16 @@ class CNInfoReportDownloader:
             logger.error("查询权益分派公告失败: %s", exc)
             return []
 
-        # 按 year 提取(实施公告在次年 5-7 月 → 归到 announcementTime.year - 1)
+        # 按**分配年度**提取(标题里的年份),而不是发布时间。
+        #
+        # 旧逻辑用「发布年 - 1」,对年度分配正确(实施公告在次年 5-7 月),
+        # 但对**半年度分配**就错了:「2024年半年度权益分派实施公告」发布于
+        # 2024-08,会被归到 2023,与「2024年年度」(发布于 2025-06)撞车;
+        # 又因 dedup 键是 (stock_code, report_year, event_type),
+        # API 按时间倒序返回 → 半年度的先入库,年度的被跳过,
+        # 于是 2023/2024/2025 三年的分红率全错(实测东阿阿胶)。
+        #
+        # 标题里能直接读出分配年度,优先用它;读不出时才回退到发布年 - 1。
         out = []
         for ann in announcements:
             title = ann.get('announcementTitle', '')
@@ -331,13 +340,20 @@ class CNInfoReportDownloader:
                 continue
             from datetime import datetime
             ts = datetime.utcfromtimestamp(ts_ms / 1000.0)
+            title_year, kind = _parse_dividend_announcement_title(title)
             for y in years:
-                if ts.year - 1 == y:
-                    out.append({
-                        'year': y, 'title': title, 'adjunctUrl': adj,
-                        'announcementTime': ts_ms, 'time_str': ts.isoformat(),
-                    })
-                    break
+                if title_year is not None:
+                    if title_year != y:
+                        continue
+                elif ts.year - 1 != y:
+                    # 标题读不出年份 → 回退到发布时间推断
+                    continue
+                out.append({
+                    'year': y, 'title': title, 'adjunctUrl': adj,
+                    'announcementTime': ts_ms, 'time_str': ts.isoformat(),
+                    'dividend_kind': kind,
+                })
+                break
         return out
 
     def download_reports(self, code_or_name: str, years: list, save_dir: str = None):
@@ -448,15 +464,86 @@ def query_dividend_announcements(
             continue
         from datetime import datetime
         ts = datetime.utcfromtimestamp(ts_ms / 1000.0)
-        # 实施公告在次年上半年 → 归属前一年
+        # 按**分配年度**归年(标题里的年份),读不出才回退到发布年 - 1。
+        # 详见 CNInfoReportDownloader.query_dividend_announcements 的说明。
+        title_year, kind = _parse_dividend_announcement_title(title)
         for y in years:
-            if ts.year - 1 == y:
-                out.append({
-                    'year': y, 'title': title, 'adjunctUrl': adj,
-                    'announcementTime': ts_ms, 'time_str': ts.isoformat(),
-                })
-                break
+            if title_year is not None:
+                if title_year != y:
+                    continue
+            elif ts.year - 1 != y:
+                continue
+            out.append({
+                'year': y, 'title': title, 'adjunctUrl': adj,
+                'announcementTime': ts_ms, 'time_str': ts.isoformat(),
+                'dividend_kind': kind,
+            })
+            break
     return out
+
+
+def _extract_dividend_total(text: str) -> float | None:
+    """从公告文本提取「现金分红总额」(元)。
+
+    为什么不自己算:公告里的「每10股派 X 元」是按**参与分配股数**
+    (总股本剔除回购专户后)折算的,而 share_structure 里存的是**含回购股的
+    总股本**。两者口径不同,用「每10股 × 年末总股本」反推会系统性偏大
+    (东阿阿胶 2020-2022 三年偏大 1.56%)。
+
+    公告直接披露的「现金分红总额」才是权威分子(与年报「利润分配预案」
+    和官方现金分红比例同口径)。
+
+    覆盖的句式(实测东阿阿胶 13 份公告):
+      1. 「现金分红总额为 425,113,999.05 元」
+      2. 「（现金红利派发总额÷参与利润分配的总股数）×10=817,850,566.48元÷…」
+      3. 「合计派发现金总额为 588,619,383.30 元」
+    """
+    if not text:
+        return None
+    flat = text.replace(" ", "").replace("\n", "").replace(" ", "")
+
+    patterns = (
+        # 句式 1:最明确,优先
+        r"现金分红总额为([0-9,]+\.?[0-9]*)元",
+        # 句式 3:早期公告
+        r"合计派发现金总额为([0-9,]+\.?[0-9]*)元",
+        # 句式 4:每股派现型公告(600285 表述)
+        r"共计派发现金红利([0-9,]+\.?[0-9]*)元",
+        # 句式 2:折算公式
+        r"×10=([0-9,]+\.?[0-9]*)元",
+    )
+    for pat in patterns:
+        m = re.search(pat, flat)
+        if m:
+            try:
+                return float(m.group(1).replace(",", ""))
+            except (TypeError, ValueError):
+                continue
+    return None
+
+
+def _parse_dividend_announcement_title(title: str) -> tuple[int | None, str]:
+    """从公告标题解析「分配年度」与「分配性质」。
+
+    Returns:
+        (year, kind) —— year 是**分配年度**(公告标题里的年份),
+        kind 是 'annual'(年度分配) / 'interim'(半年度分配)。
+        解析不出年份时返回 (None, 'annual')。
+
+    为什么不能按发布时间归年:「2024年半年度权益分派实施公告」发布于 2024-08,
+    若按「发布年 - 1」归年会落到 2023,与「2024年年度权益分派实施公告」
+    (发布于 2025-06)撞在同一年,后入库的半年度数值会覆盖年度数值 ——
+    实测东阿阿胶 2023/2024/2025 三年的分红率因此算错。
+    """
+    if not title:
+        return None, "annual"
+    flat = title.replace(" ", "").replace("　", "")
+    m = re.search(r"(20\d{2})年(半年度|年度)?", flat)
+    if not m:
+        return None, "annual"
+    year = int(m.group(1))
+    kind = "interim" if m.group(2) == "半年度" else "annual"
+    return year, kind
 
 
 def _extract_dividend_from_pdf(pdf_path: str) -> dict:
@@ -467,6 +554,7 @@ def _extract_dividend_from_pdf(pdf_path: str) -> dict:
     2. 回退 "除权(息)参考价格=(前收盘价格-0.XXXXX)" 反推
     3. 提取 "股权登记日总股本为 X,XXX,XXX 股" → total_shares
     4. 提取 "每 10 股派 X.XX 元" → 优先用这个(财会标准披露)
+    5. 提取 "现金分红总额为 X 元" → cash_dividend_total(**权威分子**)
 
     Returns:
         {'cash_per_share': float, 'cash_per_10_shares': float,
@@ -476,15 +564,23 @@ def _extract_dividend_from_pdf(pdf_path: str) -> dict:
     import pdfplumber  # type: ignore
     text = ""
     with pdfplumber.open(pdf_path) as pdf:
-        for page in pdf.pages[:3]:  # 只看前 3 页(关键信息在前面)
+        # 读前 6 页并逐页检查是否已拿到「现金分红总额」。
+        # 原实现只看前 3 页且遇到"现金红利+股权登记/总股本"就 break,
+        # 万一总额句在更后面就漏掉 —— 分红率会退回到
+        # 「每10股派息 × 年末总股本」的反推口径(偏大)。
+        # 实测东阿阿胶/羚锐制药的公告总额都在前 3 页内,这里是稳健性冗余。
+        for page in pdf.pages[:6]:
             t = page.extract_text() or ""
             text += t + "\n"
-            if "现金红利" in t and ("股权登记" in t or "总股本" in t):
-                break  # 抓够就停
+            # 已拿到「总额」就可以停(它是最权威的分子)
+            if _extract_dividend_total(text) is not None:
+                break
 
     out: dict = {
         'cash_per_share': None, 'cash_per_10_shares': None,
         'total_shares': None, 'event_date': None,
+        'cash_dividend_total': None,   # 公告披露的现金分红总额(元)——权威分子
+        'dividend_kind': 'annual',     # 'annual' 年度分配 / 'interim' 半年度分配
     }
     # 1. "每股实际派发现金红利人民币 0.XXXXX 元"
     m = re.search(
@@ -543,6 +639,9 @@ def _extract_dividend_from_pdf(pdf_path: str) -> dict:
     )
     if m:
         out['event_date'] = f"{m.group(1)}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+
+    # 6. "现金分红总额为 X 元" → 权威分子(避免用「每10股 × 年末总股本」反推)
+    out['cash_dividend_total'] = _extract_dividend_total(text)
     return out
 
 
@@ -596,36 +695,62 @@ def persist_dividend_to_db(
             share_by_year[ry] = int(ts)
 
     inserted = 0
+    updated = 0
     for ev in events:
         cps = ev.get('cash_per_share')
         cps10 = ev.get('cash_per_10_shares')
         if cps is None and cps10 is not None:
             cps = round(cps10 / 10.0, 4)
-        if cps is None and cps10 is None:
+        total_amt = ev.get('cash_dividend_total')
+        if cps is None and cps10 is None and total_amt is None:
             continue
         ry = ev['report_year']
+        kind = ev.get('dividend_kind') or 'annual'
         # 优先用 events 自带的 total_shares,否则从 share_structure 取
         total_shares = ev.get('total_shares') or share_by_year.get(ry)
-        # 是否已存在
+        scheme = ev.get('announcement_title', '').split(' ')[0]
+
+        # UPSERT(更新或初始化):已存在则刷新字段,不存在则插入。
+        # dedup 键含 dividend_kind —— 同一年内年度分配与半年度分配是**两笔**
+        # 独立的分红,不能互相覆盖(旧实现只有 (stock_code, report_year,
+        # event_type),后入库的会顶掉先入库的)。
+        #
+        # 用 UPDATE 而非「已存在就 skip」是为了支持**重跑刷新**:
+        # 公告解析规则改进后(比如新增了「现金分红总额」提取),重跑一次
+        # 就该把新字段补进已有行,而不是因为 dedup 命中被跳过。
         existing = db._duckdb_conn.execute(
-            "SELECT 1 FROM capital_change_events "
-            "WHERE stock_code=? AND report_year=? AND event_type='cash_dividend'",
-            [stock_code, ry],
+            "SELECT id FROM capital_change_events "
+            "WHERE stock_code=? AND report_year=? AND event_type='cash_dividend' "
+            "AND COALESCE(dividend_kind,'annual')=?",
+            [stock_code, ry, kind],
         ).fetchone()
         if existing:
+            row_id = existing[0]
+            db._duckdb_conn.execute(
+                "UPDATE capital_change_events SET "
+                " company_name=?, event_date=?, cash_per_10_shares=?, total_shares=?, "
+                " cash_dividend_total=COALESCE(?, cash_dividend_total), "
+                " source=?, scheme_description=?, updated_at=CURRENT_TIMESTAMP "
+                "WHERE id=?",
+                [company_name, ev.get('event_date') or '1900-01-01',
+                 cps10 or 0.0, total_shares, total_amt, source, scheme, row_id],
+            )
+            updated += 1
             continue
+
         # 插入
-        scheme = ev.get('announcement_title', '').split(' ')[0]
         db._duckdb_conn.execute(
             "INSERT INTO capital_change_events "
             "(company_name, stock_code, report_year, report_period, "
             " event_type, event_date, cash_per_10_shares, total_shares, "
-            " source, scheme_description) "
-            "VALUES (?, ?, ?, 'FY', 'cash_dividend', ?, ?, ?, ?, ?)",
+            " cash_dividend_total, dividend_kind, source, scheme_description) "
+            "VALUES (?, ?, ?, 'FY', 'cash_dividend', ?, ?, ?, ?, ?, ?, ?)",
             [company_name, stock_code, ry, ev.get('event_date') or '1900-01-01',
-             cps10 or 0.0, total_shares, source, scheme],
+             cps10 or 0.0, total_shares, total_amt, kind, source, scheme],
         )
         inserted += 1
+    if updated:
+        logger.info("分红事件更新 %d 条(已存在,字段刷新)", updated)
     return inserted
 
 
@@ -663,10 +788,13 @@ def query_dividend_announcements_and_persist(
         info = _extract_dividend_from_pdf(str(local))
         info['report_year'] = ann['year']
         info['announcement_title'] = ann['title']
+        # 分配性质(年度/半年度)—— 决定 dedup 时能否与同年另一笔共存
+        info['dividend_kind'] = ann.get('dividend_kind') or 'annual'
         events.append(info)
         print(
-            f"  {ann['year']} {ann['title'][:40]}... → "
+            f"  {ann['year']}[{info['dividend_kind']}] {ann['title'][:36]}... → "
             f"每股 {info['cash_per_share']}元 (10股 {info['cash_per_10_shares']}元)"
+            f" 总额 {info['cash_dividend_total']}"
             f" 总股本 {info['total_shares']}"
         )
     # 入库
