@@ -241,9 +241,19 @@ def run(
                 bs = stmts.get("consolidated_balance_sheet") or {}
                 multi_year_summary[y] = {
                     "operating_revenue": inc.get("operating_revenue"),
-                    "net_profit": inc.get("net_profit")
-                        or inc.get("net_profit_attributable_to_parent")
+                    # 归母净利优先 —— 这个字段的语义是「归母净利润」:
+                    #   - 趋势表列名是「归母净利润(亿元)」
+                    #   - 趋势图子图 2 是「归母净利润(亿元)」
+                    #   - 分红率口径 = 申报分红总额 / 归母净利润
+                    #     (与年报「现金分红占归母净利润比率」同口径)
+                    # 早先 net_profit 解析不出来,会 fallback 到归母净利,口径
+                    # 碰巧正确;net_profit 解析修好后若仍优先取它,趋势表会
+                    # 悄悄换成合并口径(东阿阿胶 2021: 96.86% vs 官方 96.52%)。
+                    "net_profit": inc.get("net_profit_attributable_to_parent")
+                        or inc.get("net_profit")
                         or inc.get("total_profit"),
+                    # 合并净利(含少数股东损益)单列,需要时用
+                    "net_profit_total": inc.get("net_profit"),
                     "net_cash_from_operations":
                         cf.get("net_cash_from_operations")
                         or cf.get("operating_cash_flow"),

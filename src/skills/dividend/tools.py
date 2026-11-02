@@ -108,27 +108,25 @@ def _compute_payout_from_events(
     total_shares: float | None,
     net_profit: float | None,
 ) -> float | None:
-    """从申报分红事件算分红率(%):Σ(cash_per_10_shares/10 × total_shares) / net_profit × 100。
+    """从申报分红事件算分红率(%):分红总额 / net_profit × 100。
 
-    只统计 event_type ∈ ('cash_dividend', 'combination') 且 cash_per_10_shares > 0
-    的事件,其他事件类型(送股/转增/配股)跳过,因为它们不含现金。
+    分红总额优先用事件里的 ``cash_dividend_total``(公告直接披露的
+    「现金分红总额」),没有才回退到 ``(cash_per_10_shares/10) × total_shares``。
+    两者口径不同(公告按参与分配股数折算,total_shares 是含回购股的年末总股本),
+    混用会让分子偏大 —— 实测东阿阿胶偏大 1.56%。
+
+    只统计 event_type ∈ ('cash_dividend', 'combination') 且含现金的事件,
+    其他事件类型(送股/转增/配股)跳过,因为它们不含现金。
+    同一年内年度分配 + 半年度分配一并累加。
 
     返回 None 时调用方应退回到现金流字段(``cash_for_dividend_and_interest``)。
     """
-    if not events or not total_shares or total_shares <= 0:
+    if not events:
         return None
     if net_profit is None or net_profit <= 0:
         return None
-    total: float = 0.0
-    for ev in events:
-        ev_type = ev.get("event_type")
-        cps = ev.get("cash_per_10_shares")
-        if ev_type not in ("cash_dividend", "combination"):
-            continue
-        if cps is None or cps <= 0:
-            continue
-        total += float(cps) / 10.0 * float(total_shares)
-    if total <= 0:
+    total = _sum_dividend_from_events(events, total_shares)
+    if total is None or total <= 0:
         return None
     return round(total / net_profit * 100, 2)
 
@@ -157,21 +155,39 @@ def _sum_dividend_from_events(
     events: list[dict[str, Any]],
     total_shares: float | None,
 ) -> float | None:
-    """从申报分红事件算申报分红总额(元):Σ(cash_per_10_shares / 10) × total_shares。
+    """从申报分红事件算申报分红总额(元)。
+
+    优先用事件里的 ``cash_dividend_total``(公告直接披露的「现金分红总额」),
+    没有才回退到 ``(cash_per_10_shares / 10) × total_shares`` 反推。
+
+    为什么要优先用公告总额:公告的「每10股派 X 元」是按**参与分配股数**
+    (总股本剔除回购专户后)折算的,而这里的 total_shares 来自 share_structure
+    的**年末总股本**(含回购股)。两个口径混用会让分子系统性偏大 ——
+    实测东阿阿胶 2020-2022 三年偏大 1.56%,分红率算成 98.0% 而官方是 96.52%。
+
+    同一年内年度分配与半年度分配是**两笔**独立的分红,这里一并累加
+    (口径:当年实际现金分红总额)。
 
     与 ``_compute_payout_from_events`` 同口径但**不**做百分比/舍入,返回原始绝对金额。
-    返回 None 时调用方应退回到现金流字段。无事件或 total_shares 无效时返回 None。
+    返回 None 时调用方应退回到现金流字段。
     """
-    if not events or not total_shares or total_shares <= 0:
+    if not events:
         return None
     total: float = 0.0
     has_any = False
     for ev in events:
         ev_type = ev.get("event_type")
-        cps = ev.get("cash_per_10_shares")
         if ev_type not in ("cash_dividend", "combination"):
             continue
-        if cps is None or cps <= 0:
+        # 优先:公告披露的现金分红总额(权威分子,无口径歧义)
+        amt = ev.get("cash_dividend_total")
+        if amt is not None and float(amt) > 0:
+            total += float(amt)
+            has_any = True
+            continue
+        # 回退:每10股派息 × 总股本(老数据没有 cash_dividend_total)
+        cps = ev.get("cash_per_10_shares")
+        if cps is None or cps <= 0 or not total_shares or total_shares <= 0:
             continue
         total += float(cps) / 10.0 * float(total_shares)
         has_any = True
@@ -495,7 +511,8 @@ def query_dividend_events(
     """查 capital_change_events 表,返回某年的现金分红事件列表。
 
     返回字段:cash_per_10_shares, bonus_shares_per_10, capitalized_shares_per_10,
-    event_type, event_date, scheme_description。
+    cash_dividend_total(公告披露的现金分红总额,分红率的权威分子),
+    dividend_kind(annual/interim), event_type, event_date, scheme_description。
     失败(DB 异常/未连接)返回 []。
     """
     try:
@@ -505,6 +522,7 @@ def query_dividend_events(
     rows = conn.execute(
         """
         SELECT cash_per_10_shares, bonus_shares_per_10, capitalized_shares_per_10,
+               cash_dividend_total, dividend_kind,
                event_type, event_date, scheme_description
         FROM capital_change_events
         WHERE stock_code = ?
@@ -516,7 +534,8 @@ def query_dividend_events(
           )
           AND (cash_per_10_shares > 0
                OR bonus_shares_per_10 > 0
-               OR capitalized_shares_per_10 > 0)
+               OR capitalized_shares_per_10 > 0
+               OR cash_dividend_total > 0)
         ORDER BY event_date
         """,
         [stock_code, year, period],
@@ -526,9 +545,11 @@ def query_dividend_events(
             "cash_per_10_shares": r[0],
             "bonus_shares_per_10": r[1],
             "capitalized_shares_per_10": r[2],
-            "event_type": r[3],
-            "event_date": r[4],
-            "scheme_description": r[5],
+            "cash_dividend_total": r[3],
+            "dividend_kind": r[4],
+            "event_type": r[5],
+            "event_date": r[6],
+            "scheme_description": r[7],
         }
         for r in rows
     ]
@@ -550,8 +571,8 @@ def query_dividend_events_by_year(
     rows = conn.execute(
         """
         SELECT report_year, cash_per_10_shares, bonus_shares_per_10,
-               capitalized_shares_per_10, event_type, event_date,
-               scheme_description
+               capitalized_shares_per_10, cash_dividend_total, dividend_kind,
+               event_type, event_date, scheme_description
         FROM capital_change_events
         WHERE stock_code = ?
           AND report_year BETWEEN ? AND ?
@@ -562,7 +583,8 @@ def query_dividend_events_by_year(
           )
           AND (cash_per_10_shares > 0
                OR bonus_shares_per_10 > 0
-               OR capitalized_shares_per_10 > 0)
+               OR capitalized_shares_per_10 > 0
+               OR cash_dividend_total > 0)
         ORDER BY report_year, event_date
         """,
         [stock_code, start_year, end_year, period],
@@ -573,9 +595,11 @@ def query_dividend_events_by_year(
             "cash_per_10_shares": r[1],
             "bonus_shares_per_10": r[2],
             "capitalized_shares_per_10": r[3],
-            "event_type": r[4],
-            "event_date": r[5],
-            "scheme_description": r[6],
+            "cash_dividend_total": r[4],
+            "dividend_kind": r[5],
+            "event_type": r[6],
+            "event_date": r[7],
+            "scheme_description": r[8],
         }
         result.setdefault(str(r[0]), []).append(d)
     return result

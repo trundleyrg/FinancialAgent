@@ -11,8 +11,45 @@ from dotenv import load_dotenv
 # strips an optional numeric or Chinese ordinal prefix such as "（一）" / "(二十）".
 _ROW_PUNCT_RE = re.compile(r"[：:（）()\s\n\-—–－]")
 _ROW_PREFIX_RE = re.compile(r"^[（(]?(?:\d+|[一二三四五六七八九十]+)[）)]?[\s、:：]?")
-from peewee import *
+
 from typing import List, Optional, Dict, Any, Type
+
+# 匹配用归一化:去掉空白、编号前缀、标点与全角/半角差异。
+# 用于 help_text 匹配的兜底 —— help_text 是给人看的科目说明,却要当精确
+# 匹配串用,任何格式差异(全角减号 vs 半角、中文引号 vs 直引号)都会失配。
+_MATCH_STRIP_CHARS = re.compile(r"[\s　（）()、,.\"'“”‘’\[\]【】\-—–－:：;；!！?？]")
+_MATCH_PREFIX_RE = re.compile(
+    r"^[（(]?(?:\d+|[一二三四五六七八九十]+)[）)]?[\s、.．]?"
+)
+
+
+def _normalize_match_text(text: str) -> str:
+    """把科目文字归一化成"只比汉字与数字"的形态,用于宽松匹配。
+
+    处理:
+      - 去掉所有空白(含全角空格)
+      - 去掉行首编号前缀(「1.」「一、」「（一）」)
+      - 去掉标点(引号/括号/破折号/冒号等,全角半角一律)
+    """
+    if not text:
+        return ""
+    s = str(text).replace("　", "")
+    s = _MATCH_PREFIX_RE.sub("", s)
+    s = _MATCH_STRIP_CHARS.sub("", s)
+    return s
+
+
+# 同义措辞登记表:科目名在不同年份的年报里措辞不同、但语义相同。
+# 归一化解决不了这类(「所有者」vs「股东」是实词差异),需显式登记。
+# key = model 字段名;value = 该科目在 PDF 里可能出现的其它措辞。
+_FIELD_SYNONYMS: Dict[str, List[str]] = {
+    "net_profit_attributable_to_parent": [
+        # 2016-2019 年报用「归属于母公司所有者的净利润」,2020+ 用「股东的」
+        "归属于母公司所有者的净利润",
+        "归属于母公司所有者的净利润额",
+    ],
+}
+from peewee import *
 import pandas as pd
 import duckdb
 from datetime import datetime
@@ -1393,6 +1430,43 @@ def _parse_table_data_to_model_data(
                 ):
                     field_name = fn
                     break
+
+        # Stage 2b: 归一化 + 同义措辞兜底。
+        #
+        # help_text 写的是给人看的科目说明,但被当精确匹配串用,任何格式
+        # 差异都会导致失配。实测两类:
+        #   1) 标点/编号差异 —— help_text "五、净利润（净亏损以"-"号填列）"
+        #      vs PDF "五、净利润（净亏损以"－"号填列）"(全角减号+中文引号)
+        #      → 归一化后一致
+        #   2) 同义措辞 —— help_text "归属于母公司股东的净利润"
+        #      vs PDF 2016-2019 版式 "归属于母公司所有者的净利润"
+        #      → 归一化解决不了,需 _FIELD_SYNONYMS 显式登记
+        if not canonical_field and not field_name:
+            norm_item = _normalize_match_text(item_name)
+            if norm_item:
+                # 2b-1: 同义措辞(显式登记,最精确)
+                for fn, syns in _FIELD_SYNONYMS.items():
+                    if fn in invalid_for_parent:
+                        continue
+                    for syn in syns:
+                        if _normalize_match_text(syn) in norm_item:
+                            field_name = fn
+                            break
+                    if field_name:
+                        break
+                # 2b-2: 归一化后按 help_text 包含匹配
+                if not field_name:
+                    for help_text, fn in sorted(
+                        field_help_text_map.items(),
+                        key=lambda kv: len(kv[0]),
+                        reverse=True,
+                    ):
+                        if fn in invalid_for_parent or not help_text:
+                            continue
+                        norm_help = _normalize_match_text(help_text)
+                        if norm_help and norm_help in norm_item:
+                            field_name = fn
+                            break
 
         # Stage 3: field-name substring match (current behavior).
         if not canonical_field and not field_name:
