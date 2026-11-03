@@ -16,28 +16,15 @@ from src.db.models import (
 )
 
 
+# 生产注册表的初始快照 —— reset 时恢复到这里。
+# 不用硬编码 spec 列表:新增报表时生产与测试的默认集合自动保持一致。
+_INITIAL_REGISTRY = dict(_STATEMENT_REGISTRY)
+
+
 def _reset_registry():
-    """每个测试前后重置注册表到 6 张默认。"""
+    """每个测试前后重置注册表到生产默认值。"""
     _STATEMENT_REGISTRY.clear()
-    for spec in _DEFAULT_SPECS():
-        _STATEMENT_REGISTRY[spec.table_name] = spec
-
-
-def _DEFAULT_SPECS():
-    return (
-        StatementSpec("consolidated_balance_sheet", "合并资产负债表",
-                      "consolidated", "balance_sheet", ConsolidatedBalanceSheet),
-        StatementSpec("parent_company_balance_sheet", "母公司资产负债表",
-                      "parent_company", "balance_sheet", ParentCompanyBalanceSheet),
-        StatementSpec("consolidated_income_statement", "合并利润表",
-                      "consolidated", "income_statement", ConsolidatedIncomeStatement),
-        StatementSpec("parent_company_income_statement", "母公司利润表",
-                      "parent_company", "income_statement", ParentCompanyIncomeStatement),
-        StatementSpec("consolidated_cash_flow_statement", "合并现金流量表",
-                      "consolidated", "cash_flow", ConsolidatedCashFlowStatement),
-        StatementSpec("parent_company_cash_flow_statement", "母公司现金流量表",
-                      "parent_company", "cash_flow", ParentCompanyCashFlowStatement),
-    )
+    _STATEMENT_REGISTRY.update(_INITIAL_REGISTRY)
 
 
 @pytest.fixture(autouse=True)
@@ -59,15 +46,23 @@ class TestStatementSpec:
 
 
 class TestRegistry:
-    def test_default_has_six(self):
-        assert len(list_statements()) == 6
+    def test_default_has_all_builtin_statements(self):
+        assert set(list_statements()) == {
+            "consolidated_balance_sheet",
+            "parent_company_balance_sheet",
+            "consolidated_income_statement",
+            "parent_company_income_statement",
+            "consolidated_cash_flow_statement",
+            "parent_company_cash_flow_statement",
+            "quarterly_financial_metrics",
+        }
 
     def test_register_new_statement(self):
         spec = StatementSpec("notes_schedule", "附注明细",
                              "consolidated", "other", ConsolidatedBalanceSheet)
         register_statement(spec)
         assert "notes_schedule" in list_statements()
-        assert len(list_statements()) == 7
+        assert len(list_statements()) == len(_INITIAL_REGISTRY) + 1
 
     def test_register_overwrites_existing(self, caplog):
         spec = StatementSpec("consolidated_balance_sheet", "新名",
@@ -81,9 +76,9 @@ class TestRegistry:
 
 
 class TestStatementRepositoryBasics:
-    def test_statements_property_returns_6_by_default(self, fake_connector):
+    def test_statements_property_returns_all_by_default(self, fake_connector):
         repo = StatementRepository(fake_connector)
-        assert len(repo.statements) == 6
+        assert len(repo.statements) == len(_INITIAL_REGISTRY)
 
     def test_by_scope_consolidated(self, fake_connector):
         repo = StatementRepository(fake_connector)
@@ -158,7 +153,7 @@ class TestGetStatement:
 
 
 class TestGetAllStatements:
-    def test_returns_six_keys_with_none_for_missing(self, fake_connector):
+    def test_returns_all_keys_with_none_for_missing(self, fake_connector):
         _seed_statement(fake_connector, "consolidated_balance_sheet", [
             {"company_name": "A", "stock_code": "000001",
              "report_year": 2024, "report_period": "FY", "monetary_funds": 1.0},
@@ -174,6 +169,7 @@ class TestGetAllStatements:
             "parent_company_income_statement",
             "consolidated_cash_flow_statement",
             "parent_company_cash_flow_statement",
+            "quarterly_financial_metrics",
         }
         assert out["consolidated_balance_sheet"]["monetary_funds"] == 1.0
         assert out["parent_company_balance_sheet"] is None

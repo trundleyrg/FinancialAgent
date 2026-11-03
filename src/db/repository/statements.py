@@ -63,7 +63,7 @@ _STATEMENT_REGISTRY: Dict[str, StatementSpec] = {
         ),
         StatementSpec(
             "quarterly_financial_metrics", "季度主要财务指标",
-            scope="consolidated", kind="other",
+            scope="quarterly", kind="metrics",
             model_class=QuarterlyFinancialMetrics,
         ),
     )
@@ -146,5 +146,23 @@ class StatementRepository(BaseRepository):
             stmts = self.get_all_statements(year_key)
             if any(stmts.values()):
                 out[y] = stmts
+        return out
+
+    def get_quarterly_metrics(
+        self, key: ReportKey,
+    ) -> Dict[str, Optional[Dict[str, Any]]]:
+        """季度主要财务指标，按 scope 拆成两行。
+
+        一份季报有两行：scope='CURRENT'（报表的「本报告期」列）与
+        scope='YTD'（报表的「年初至报告期末」列，仅三季报有）。
+
+        返回 {'CURRENT': {...} | None, 'YTD': {...} | None}。
+        """
+        rows = self._query("quarterly_financial_metrics", key)
+        out: Dict[str, Optional[Dict[str, Any]]] = {"CURRENT": None, "YTD": None}
+        for row in rows:
+            scope = row.get("scope")
+            if scope in out and out[scope] is None:
+                out[scope] = row
         return out
 

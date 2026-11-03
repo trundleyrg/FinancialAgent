@@ -63,3 +63,39 @@ def test_save_quarterly_metrics_is_idempotent(db):
 def test_statement_registry_includes_quarterly_metrics():
     from src.db.repository.statements import list_statements
     assert "quarterly_financial_metrics" in list_statements()
+
+
+def test_repository_splits_scopes(db):
+    """get_quarterly_metrics 把 CURRENT / YTD 两行拆开返回。"""
+    from src.db.db_connector import save_quarterly_metrics
+    from src.db.repository.keys import ReportKey
+    from src.db.repository.statements import StatementRepository
+
+    save_quarterly_metrics(
+        metrics_by_scope={
+            "CURRENT": {"operating_revenue": 942156123.36, "total_assets": 5755687724.88},
+            "YTD": {"operating_revenue": 3041361639.17},
+        },
+        company_name="羚锐制药", stock_code="600285",
+        report_year=2025, report_period="Q3", db_connector=db,
+    )
+
+    repo = StatementRepository(db)
+    out = repo.get_quarterly_metrics(
+        ReportKey(stock_code="600285", year=2025, period="Q3"),
+    )
+    assert out["CURRENT"]["operating_revenue"] == 942156123.36
+    assert out["CURRENT"]["total_assets"] == 5755687724.88
+    assert out["YTD"]["operating_revenue"] == 3041361639.17
+    assert out["YTD"]["total_assets"] is None
+
+
+def test_repository_returns_none_when_no_quarterly_metrics(db):
+    from src.db.repository.keys import ReportKey
+    from src.db.repository.statements import StatementRepository
+
+    repo = StatementRepository(db)
+    out = repo.get_quarterly_metrics(
+        ReportKey(stock_code="999999", year=2025, period="Q3"),
+    )
+    assert out == {"CURRENT": None, "YTD": None}

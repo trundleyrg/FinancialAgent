@@ -22,7 +22,7 @@ def _looks_like_stock_code(value: str) -> bool:
             break
     return len(v) == 6 and v.isdigit()
 
-# 短别名 → 规范名（仅这 6 张有别名；新报表按规范名调 repo）
+# 短别名 → 规范名（未列出的报表按规范名调 repo）
 _STATEMENT_ALIASES = {
     "balance_sheet":            "consolidated_balance_sheet",
     "parent_balance_sheet":     "parent_company_balance_sheet",
@@ -30,6 +30,7 @@ _STATEMENT_ALIASES = {
     "parent_income_statement":  "parent_company_income_statement",
     "cash_flow":                "consolidated_cash_flow_statement",
     "parent_cash_flow":         "parent_company_cash_flow_statement",
+    "quarterly_metrics":        "quarterly_financial_metrics",
 }
 
 _db = None
