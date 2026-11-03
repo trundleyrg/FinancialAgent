@@ -15,6 +15,68 @@ from src.utils.logger import chapter_logger
 from src.db.table_models import TableWithHeader
 from src.tools.toc_fallback_parser import parse_toc_fallback
 
+# 报告标题行模式："{年} 年{期间}报告"
+# 顺序敏感：'第一季度' / '第三季度' / '半年度' 必须在 '年度' 之前，
+# 否则 "半年度报告" 会先命中 "年度" 被判成 FY。
+REPORT_TITLE_PATTERN = re.compile(
+    r'(?P<year>(?:19|20)\d{2})\s*年\s*'
+    r'(?P<label>第一季度|第三季度|半年度|年度)'
+)
+
+# 标题里的期间关键词 → report_period 取值
+REPORT_PERIOD_BY_LABEL = {
+    '第一季度': 'Q1',
+    '第三季度': 'Q3',
+    '半年度': 'H1',
+    '年度': 'FY',
+}
+
+# 回退用的关键词表：顺序敏感，半年度必须先于年度
+_REPORT_PERIOD_KEYWORDS = (
+    ('第三季度报告', 'Q3'),
+    ('三季报', 'Q3'),
+    ('第一季度报告', 'Q1'),
+    ('一季报', 'Q1'),
+    ('半年度报告', 'H1'),
+    ('半年报', 'H1'),
+    ('中报', 'H1'),
+    ('半年度财务报告', 'H1'),
+    ('年度报告', 'FY'),
+    ('年报', 'FY'),
+    ('年度财务报告', 'FY'),
+)
+
+
+def parse_report_period(text: str) -> Tuple[int, Optional[str]]:
+    """从报告文本中解析 (report_year, report_period)。
+
+    report_period 取值 'Q1' / 'H1' / 'Q3' / 'FY'；解析不到返回 (0, None)。
+
+    按行扫描并返回**第一个**命中报告标题模式的行。首页的公司名行
+    （"河南羚锐制药股份有限公司2025 年第一季度报告"）总是第一行，
+    比"全文首个正则命中"更可靠 —— 正文里可能出现其他年份的对比数字。
+    """
+    for line in text.split('\n'):
+        m = REPORT_TITLE_PATTERN.search(line)
+        if m:
+            return int(m.group('year')), REPORT_PERIOD_BY_LABEL[m.group('label')]
+
+    # 回退：标题行没有年份时用关键词判定，期间关键词的顺序敏感
+    for keyword, period in _REPORT_PERIOD_KEYWORDS:
+        if keyword not in text:
+            continue
+        year = 0
+        for line in text.split('\n'):
+            if keyword in line:
+                ym = re.search(r'(?:19|20)\d{2}', line)
+                if ym:
+                    year = int(ym.group(0))
+                break
+        return year, period
+
+    return 0, None
+
+
 class PDFChapterExtractor:
     def __init__(self, pdf_path: str):
         self.doc = fitz.open(pdf_path)
@@ -86,32 +148,8 @@ class PDFChapterExtractor:
                 if company_code:
                     break
         
-        # 从标题中提取年份，寻找年报中的年份信息
-        for line in lines:
-            line = line.strip()
-            if "年度报告" in line or "年报" in line:
-                year_match = re.search(r'(\d{4})', line)
-                if year_match:
-                    year = int(year_match.group(1))
-                    break
-        
-        # 确定报告期间
-        report_period = None
-        for line in lines:
-            if '年度报告' in text or '年报' in text:
-                report_period = 'FY'
-            elif '三季报' in text or '第三季度报告' in text:
-                report_period = 'Q3'
-            elif '半年报' in text or '中报' in text or '半年度报告' in text:
-                report_period = 'H1'
-            elif '一季报' in text or '第一季度报告' in text:
-                report_period = 'Q1'
-            elif '半年度财务报告' in text:
-                report_period = 'H1'
-            elif '年度财务报告' in text:
-                report_period = 'FY'
-            if report_period is not None:
-                break
+        # 从报告标题行解析年份与报告期间（覆盖年报/半年报/一季报/三季报）
+        year, report_period = parse_report_period(text)
 
         if not company_code and (company_name or company_short_name):
             try:
