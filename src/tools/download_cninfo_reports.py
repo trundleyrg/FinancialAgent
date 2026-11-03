@@ -21,8 +21,50 @@ logger = logging.getLogger(__name__)
 
 
 class CNInfoReportDownloader:
-    """巨潮资讯网年度报告下载器"""
-    
+    """巨潮资讯网报告下载器（年报/半年报/一季报/三季报）"""
+
+    # 巨潮资讯网公告分类：报告类型 → category 参数
+    REPORT_CATEGORY = {
+        'FY': 'category_ndbg_szsh',   # 年度报告
+        'Q1': 'category_yjdbg_szsh',  # 第一季度报告
+        'H1': 'category_bndbg_szsh',  # 半年度报告
+        'Q3': 'category_sjdbg_szsh',  # 第三季度报告
+    }
+
+    # 报告类型 → 标题中必须出现的关键词
+    REPORT_TITLE_KEYWORD = {
+        'FY': ('年度报告',),
+        'Q1': ('第一季度报告',),
+        'H1': ('半年度报告',),
+        'Q3': ('第三季度报告',),
+    }
+
+    # 报告类型 → 标题中**不能**出现的关键词（防止类型互串）。
+    # "半年度报告" 里含 "年度报告"，所以查年报时必须排除半年度类标题；
+    # "第一季度报告" 里含 "季度"，同理。
+    _PERIOD_TITLE_CONFLICTS = {
+        'FY': ('半年度', '半年报', '季度', '季报'),
+        'Q1': ('半年度', '半年报', '第三季度', '三季度'),
+        'H1': ('第一季度', '一季报', '第三季度', '三季度'),
+        'Q3': ('第一季度', '一季报', '半年度', '半年报'),
+    }
+
+    # 报告类型 → 搜索窗口的年份偏移。
+    # 年报在次年 4 月底前发布；季报/半年报在**报告当年**发布
+    # （Q1→4月、H1→8月、Q3→10月）。
+    REPORT_SEARCH_YEAR_OFFSET = {
+        'FY': (1, 2),
+        'Q1': (0,),
+        'H1': (0,),
+        'Q3': (0,),
+    }
+
+    # 标题里必须排除的非正式版本
+    _TITLE_EXCLUDE_KEYWORDS = (
+        '摘要', '英文', '已取消', '修订公告', '补充公告',
+        '补充说明', '决议公告', '主要财务指标',
+    )
+
     def __init__(self):
         self.session = requests.Session()
         self.headers = {
@@ -163,101 +205,130 @@ class CNInfoReportDownloader:
             logger.info(f"按公司名称查询: {code_or_name}")
             return self.search_stock_by_name(code_or_name)
     
-    def query_annual_reports(self, stock_code: str, org_id: str, column: str, plate: str, years: list) -> list:
-        """查询年度报告列表"""
+    def query_reports_by_period(self, stock_code: str, org_id: str, column: str,
+                                plate: str, years: list, periods: list) -> list:
+        """按报告类型查询公告列表。
+
+        Args:
+            years: 报告所属年份列表，如 [2024, 2025]
+            periods: 报告类型列表，如 ['FY'] 或 ['Q1', 'H1', 'Q3']
+        Returns:
+            [{'title','year','period','adjunctUrl','announcementId','secName','announcementTime'}]
+        """
+        reports = []
+        for period in periods:
+            category = self.REPORT_CATEGORY.get(period)
+            if not category:
+                logger.warning(f"未知报告类型 {period}，跳过")
+                continue
+            for year in years:
+                reports.extend(self._query_period_reports(
+                    stock_code, org_id, column, plate, int(year), period, category,
+                ))
+        return reports
+
+    def _query_period_reports(self, stock_code: str, org_id: str, column: str,
+                              plate: str, year: int, period: str,
+                              category: str) -> list:
+        """查询某一年度、某一类型的报告。"""
         reports = []
         url = "http://www.cninfo.com.cn/new/hisAnnouncement/query"
 
-        for year in years:
-            found_valid = False
+        for search_year in [year + off for off in self.REPORT_SEARCH_YEAR_OFFSET[period]]:
+            se_date = f"{search_year}-01-01~{search_year}-12-31"
 
-            # 首先在当年搜索，如果找到已取消的报告，则在后一年继续搜索
-            for search_year in [int(year) + 1, int(year) + 2]:  # 先搜次年，再搜第三年
-                if found_valid:
-                    break
+            data = {
+                'pageNum': '1',
+                'pageSize': '30',
+                'tabName': 'fulltext',
+                'stock': f'{stock_code},{org_id}',
+                'seDate': se_date,
+                'column': column,
+                'category': category,
+                'isHLtitle': 'true',
+                'sortName': 'time',
+                'sortType': 'desc',
+                'plate': plate,
+                'searchkey': '',
+                'secid': '',
+            }
 
-                se_date = f"{search_year}-01-01~{search_year}-12-31"  # 扩大搜索范围到全年
+            try:
+                resp = self.session.post(url, data=data, headers=self.headers, timeout=15)
+                resp.raise_for_status()
+                result = resp.json()
+                announcements = result.get('announcements', []) or []
+            except Exception as e:
+                logger.error(f"查询 {year} 年 {period} 报告失败: {e}")
+                print(f"查询 {year} 年 {period} 报告失败: {e}")
+                continue
 
-                data = {
-                    'pageNum': '1',
-                    'pageSize': '30',
-                    'tabName': 'fulltext',
-                    'stock': f'{stock_code},{org_id}',
-                    'seDate': se_date,
-                    'column': column,
-                    'category': 'category_ndbg_szsh',  # 年度报告
-                    'isHLtitle': 'true',
-                    'sortName': 'time',
-                    'sortType': 'desc',
-                    'plate': plate,
-                    'searchkey': '',
-                    'secid': '',
-                }
+            if not announcements:
+                logger.info(f"  {search_year}年未找到任何 {period} 公告")
 
-                try:
-                    resp = self.session.post(url, data=data, headers=self.headers, timeout=15)
-                    resp.raise_for_status()
-                    result = resp.json()
+            for ann in announcements:
+                title = ann.get('announcementTitle', '')
+                if not self._is_valid_report(title, year, period):
+                    continue
+                reports.append({
+                    'title': title,
+                    'year': year,
+                    'period': period,
+                    'adjunctUrl': ann.get('adjunctUrl', ''),
+                    'announcementId': ann.get('announcementId', ''),
+                    'secName': ann.get('secName', ''),
+                    'announcementTime': ann.get('announcementTime', ''),
+                })
+                logger.info(f"  找到 {year} {period} 报告: {title} (来源: {search_year}年)")
+                print(f"  找到 {year} {period} 报告: {title} (来源: {search_year}年)")
+                break  # 同一年度同一类型只取一份
 
-                    announcements = result.get('announcements', [])
-                    if not announcements:
-                        logger.info(f"  {search_year}年未找到任何公告")
-                        print(f"  {search_year}年未找到任何公告")
-                    for ann in announcements:
-                        title = ann.get('announcementTitle', '')
-
-                        # 检查是否已取消
-                        if "已取消" in title:
-                            logger.info(f"  {year} 年度报告已取消，继续寻找...")
-                            print(f"  {year} 年度报告已取消，继续寻找...")
-                            continue
-
-                        # 检查是否是有效的年度报告
-                        if self._is_valid_annual_report(title, year):
-                            reports.append({
-                                'title': title,
-                                'year': year,
-                                'adjunctUrl': ann.get('adjunctUrl', ''),
-                                'announcementId': ann.get('announcementId', ''),
-                                'secName': ann.get('secName', ''),
-                                'announcementTime': ann.get('announcementTime', ''),
-                            })
-                            logger.info(f"  找到 {year} 年度报告: {title} (来源: {search_year}年)")
-                            print(f"  找到 {year} 年度报告: {title} (来源: {search_year}年)")
-                            found_valid = True
-                            break
-
-                    time.sleep(0.5)  # 避免请求过快
-
-                except Exception as e:
-                    logger.error(f"查询 {year} 年度报告失败: {e}")
-                    print(f"查询 {year} 年度报告失败: {e}")
-
-            if not found_valid:
-                logger.warning(f"  未找到 {year} 年度有效报告")
-                print(f"  未找到 {year} 年度有效报告")
+            time.sleep(0.5)  # 避免请求过快
 
         return reports
+
+    def query_annual_reports(self, stock_code: str, org_id: str, column: str, plate: str, years: list) -> list:
+        """查询年度报告列表（`query_reports_by_period` 的年报特例）。"""
+        return self.query_reports_by_period(
+            stock_code, org_id, column, plate, years, ['FY'],
+        )
     
-    def _is_valid_annual_report(self, title: str, year: str) -> bool:
-        """判断是否是有效的年度报告"""
-        title = title.lower()
-        
-        # 排除无效的报告
-        exclude_keywords = ['摘要', '英文', '已取消', '季度', '半年度', '半年报', 
-                          '补充公告', '补充说明', '决议公告', '修订公告', '季报',
-                          '摘要版', '主要财务指标']
-        
-        for keyword in exclude_keywords:
-            if keyword in title:
-                return False
-        
-        # 必须包含"年度报告"且年份匹配
-        if '年度报告' in title or '年报' in title:
-            return True
-        
-        return False
-    
+    def _is_valid_report(self, title: str, year: int, period: str) -> bool:
+        """判断标题是否是目标年度、指定类型的正式报告。
+
+        排除摘要/英文/已取消/更正/修订等非正式版本；标题里的年份必须与
+        目标年度一致（"羚锐制药2025年第一季度报告"）。
+        """
+        if any(k in title for k in self._TITLE_EXCLUDE_KEYWORDS):
+            return False
+
+        keywords = self.REPORT_TITLE_KEYWORD.get(period)
+        if not keywords:
+            return False
+        if not any(k in title for k in keywords):
+            return False
+
+        conflicts = self._PERIOD_TITLE_CONFLICTS.get(period, ())
+        if any(k in title for k in conflicts):
+            return False
+
+        title_years = set(re.findall(r'(?:19|20)\d{2}', title))
+        if title_years and str(year) not in title_years:
+            return False
+        return True
+
+    @staticmethod
+    def build_report_filename(company_name: str, stock_code: str,
+                              year: int, period: str) -> str:
+        """报告 PDF 文件名。
+
+        年报保持 `{简称}_{代码}_{年}.pdf`（兼容既有 data/ 下的历史文件），
+        季报/半年报加周期后缀：`{简称}_{代码}_{年}{Q1|H1|Q3}.pdf`。
+        """
+        clean_name = re.sub(r'[<>:"/\\|?*]', '', company_name)
+        suffix = '' if period == 'FY' else period
+        return f"{clean_name}_{stock_code}_{year}{suffix}.pdf"
+
     def download_pdf(self, adjunct_url: str, save_path: str, filename: str) -> bool:
         """下载PDF文件"""
         pdf_url = f"https://static.cninfo.com.cn/{adjunct_url}"
@@ -356,14 +427,18 @@ class CNInfoReportDownloader:
                 break
         return out
 
-    def download_reports(self, code_or_name: str, years: list, save_dir: str = None):
-        """下载指定股票的年度报告
+    def download_reports(self, code_or_name: str, years: list, save_dir: str = None,
+                         periods: list = None):
+        """下载指定股票的报告 PDF（年报/半年报/一季报/三季报）。
 
         Args:
             code_or_name: 股票代码或公司名称
             years: 要下载的年份列表
             save_dir: 保存目录（默认为 data/{股票代码}）
+            periods: 报告类型列表，默认 ['FY']
         """
+        periods = periods or ['FY']
+
         # 获取股票信息
         stock_info = self.get_stock_info_by_code_or_name(code_or_name)
         if not stock_info:
@@ -382,38 +457,39 @@ class CNInfoReportDownloader:
         logger.info(f"保存目录: {save_dir}")
         print(f"保存目录: {save_dir}")
 
-        # 查询年度报告
+        # 查询报告
         stock_code = stock_info['code']
-        logger.info(f"\n查询 {stock_code} {years} 年度报告...")
-        print(f"\n查询 {stock_code} {years} 年度报告...")
-        reports = self.query_annual_reports(
-            stock_code, 
+        logger.info(f"\n查询 {stock_code} {years} 报告 ({'/'.join(periods)})...")
+        print(f"\n查询 {stock_code} {years} 报告 ({'/'.join(periods)})...")
+        reports = self.query_reports_by_period(
+            stock_code,
             stock_info['orgId'],
             stock_info['column'],
             stock_info['plate'],
-            years
+            years,
+            periods,
         )
-        
+
         if not reports:
-            logger.warning("未找到任何年度报告")
-            print("未找到任何年度报告")
+            logger.warning("未找到任何报告")
+            print("未找到任何报告")
             return False
 
-        logger.info(f"\n共找到 {len(reports)} 份年度报告，开始下载...")
-        print(f"\n共找到 {len(reports)} 份年度报告，开始下载...")
-        
+        logger.info(f"\n共找到 {len(reports)} 份报告，开始下载...")
+        print(f"\n共找到 {len(reports)} 份报告，开始下载...")
+
         # 下载PDF
         success_count = 0
         for report in reports:
-            # 清理公司简称中的非法字符
-            clean_name = re.sub(r'[<>:"/\\|?*]', '', stock_info['name'])
-            filename = f"{clean_name}_{stock_code}_{report['year']}.pdf"
-            
+            filename = self.build_report_filename(
+                stock_info['name'], stock_code, report['year'], report['period'],
+            )
+
             if self.download_pdf(report['adjunctUrl'], save_dir, filename):
                 success_count += 1
-            
+
             time.sleep(1)  # 避免下载过快
-        
+
         logger.info(f"\n下载完成: 成功 {success_count}/{len(reports)}")
         print(f"\n下载完成: 成功 {success_count}/{len(reports)}")
         return True
