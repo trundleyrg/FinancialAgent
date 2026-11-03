@@ -3,6 +3,7 @@
 PDF 是外部夹具,缺失时 skip:
     python script/fetch_quarterly_fixtures.py 600285 2025
 """
+
 from pathlib import Path
 
 import pytest
@@ -19,8 +20,10 @@ pytestmark = pytest.mark.skipif(
 @pytest.fixture
 def db(tmp_path):
     from src.db.db_connector import DatabaseConnector
+
     conn = DatabaseConnector(
-        database_type="duckdb", database_url=str(tmp_path / "q.duckdb"),
+        database_type="duckdb",
+        database_url=str(tmp_path / "q.duckdb"),
     )
     conn.create_tables()
     yield conn
@@ -41,9 +44,14 @@ def _parse(conn, pdf_path, year, period):
         ex.close()
 
     return save_tables_to_db(
-        main_tables=tables, company_name=name, pdf_path=str(pdf_path),
-        company_short_name=short or name, company_code=code,
-        report_year=year, report_period=period, stock_code=code,
+        main_tables=tables,
+        company_name=name,
+        pdf_path=str(pdf_path),
+        company_short_name=short or name,
+        company_code=code,
+        report_year=year,
+        report_period=period,
+        stock_code=code,
         db_connector=conn,
     )
 
@@ -100,9 +108,15 @@ def test_annual_and_quarterly_coexist_in_same_table(db):
     finally:
         ex.close()
     save_tables_to_db(
-        main_tables=tables, company_name=name, pdf_path=str(annual),
-        company_short_name=short or name, company_code=code,
-        report_year=2024, report_period="FY", stock_code=code, db_connector=db,
+        main_tables=tables,
+        company_name=name,
+        pdf_path=str(annual),
+        company_short_name=short or name,
+        company_code=code,
+        report_year=2024,
+        report_period="FY",
+        stock_code=code,
+        db_connector=db,
     )
     _parse(db, Q1_PDF, 2025, "Q1")
 

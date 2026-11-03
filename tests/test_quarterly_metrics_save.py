@@ -1,4 +1,5 @@
 """KPI 入库路径。"""
+
 from pathlib import Path
 
 import pytest
@@ -9,8 +10,10 @@ Q3_PDF = Path("data/600285/羚锐制药_600285_2025Q3.pdf")
 @pytest.fixture
 def db(tmp_path):
     from src.db.db_connector import DatabaseConnector
+
     conn = DatabaseConnector(
-        database_type="duckdb", database_url=str(tmp_path / "s.duckdb"),
+        database_type="duckdb",
+        database_url=str(tmp_path / "s.duckdb"),
     )
     conn.create_tables()
     yield conn
@@ -31,30 +34,43 @@ def test_save_quarterly_metrics_creates_rows_per_scope(db):
         ex.close()
 
     saved = save_quarterly_metrics(
-        metrics_by_scope=data, company_name="羚锐制药", stock_code="600285",
-        report_year=2025, report_period="Q3", db_connector=db,
+        metrics_by_scope=data,
+        company_name="羚锐制药",
+        stock_code="600285",
+        report_year=2025,
+        report_period="Q3",
+        db_connector=db,
     )
     assert set(saved) == {"CURRENT", "YTD"}
 
     rows = db.filter_records(
-        "quarterly_financial_metrics", stock_code="600285", report_period="Q3",
+        "quarterly_financial_metrics",
+        stock_code="600285",
+        report_period="Q3",
     )
     by_scope = {r.scope: r for r in rows}
     assert by_scope["CURRENT"].operating_revenue == 942156123.36
     assert by_scope["YTD"].operating_revenue == 3041361639.17
-    assert by_scope["YTD"].total_assets is None   # 期末指标只进 CURRENT
+    assert by_scope["YTD"].total_assets is None  # 期末指标只进 CURRENT
 
 
 def test_save_quarterly_metrics_is_idempotent(db):
     from src.db.db_connector import save_quarterly_metrics
+
     payload = {"CURRENT": {"operating_revenue": 1.0}}
     for _ in range(2):
         save_quarterly_metrics(
-            metrics_by_scope=payload, company_name="羚锐制药", stock_code="600285",
-            report_year=2025, report_period="Q3", db_connector=db,
+            metrics_by_scope=payload,
+            company_name="羚锐制药",
+            stock_code="600285",
+            report_year=2025,
+            report_period="Q3",
+            db_connector=db,
         )
     rows = db.filter_records(
-        "quarterly_financial_metrics", stock_code="600285", report_period="Q3",
+        "quarterly_financial_metrics",
+        stock_code="600285",
+        report_period="Q3",
     )
     assert len(rows) == 1
     assert rows[0].operating_revenue == 1.0
@@ -62,6 +78,7 @@ def test_save_quarterly_metrics_is_idempotent(db):
 
 def test_statement_registry_includes_quarterly_metrics():
     from src.db.repository.statements import list_statements
+
     assert "quarterly_financial_metrics" in list_statements()
 
 
@@ -73,11 +90,17 @@ def test_repository_splits_scopes(db):
 
     save_quarterly_metrics(
         metrics_by_scope={
-            "CURRENT": {"operating_revenue": 942156123.36, "total_assets": 5755687724.88},
+            "CURRENT": {
+                "operating_revenue": 942156123.36,
+                "total_assets": 5755687724.88,
+            },
             "YTD": {"operating_revenue": 3041361639.17},
         },
-        company_name="羚锐制药", stock_code="600285",
-        report_year=2025, report_period="Q3", db_connector=db,
+        company_name="羚锐制药",
+        stock_code="600285",
+        report_year=2025,
+        report_period="Q3",
+        db_connector=db,
     )
 
     repo = StatementRepository(db)

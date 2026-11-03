@@ -1,4 +1,5 @@
 """QuarterlyFinancialMetrics 模型:建表、存取、scope 维度。"""
+
 import pytest
 
 from src.db.models import QuarterlyFinancialMetrics, ReportPeriod
@@ -7,8 +8,10 @@ from src.db.models import QuarterlyFinancialMetrics, ReportPeriod
 @pytest.fixture
 def db(tmp_path):
     from src.db.db_connector import DatabaseConnector
+
     conn = DatabaseConnector(
-        database_type="duckdb", database_url=str(tmp_path / "m.duckdb"),
+        database_type="duckdb",
+        database_url=str(tmp_path / "m.duckdb"),
     )
     conn.create_tables()
     yield conn
@@ -35,7 +38,9 @@ def test_insert_and_read_back(db):
         weighted_roe=20.40,
     )
     rows = db.filter_records(
-        "quarterly_financial_metrics", stock_code="600285", report_period="Q3",
+        "quarterly_financial_metrics",
+        stock_code="600285",
+        report_period="Q3",
     )
     assert len(rows) == 1
     rec = rows[0]
@@ -50,12 +55,17 @@ def test_two_scopes_coexist(db):
     for scope in ("CURRENT", "YTD"):
         db.insert_record(
             "quarterly_financial_metrics",
-            company_name="羚锐制药", stock_code="600285",
-            report_year=2025, report_period="Q3", scope=scope,
+            company_name="羚锐制药",
+            stock_code="600285",
+            report_year=2025,
+            report_period="Q3",
+            scope=scope,
             operating_revenue=1.0 if scope == "CURRENT" else 2.0,
         )
     rows = db.filter_records(
-        "quarterly_financial_metrics", stock_code="600285", report_period="Q3",
+        "quarterly_financial_metrics",
+        stock_code="600285",
+        report_period="Q3",
     )
     assert {r.scope for r in rows} == {"CURRENT", "YTD"}
 

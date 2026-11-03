@@ -5,6 +5,7 @@
 用法:
     python script/fetch_quarterly_fixtures.py 600285 2025
 """
+
 import sys
 from pathlib import Path
 

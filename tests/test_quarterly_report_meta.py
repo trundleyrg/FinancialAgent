@@ -2,6 +2,7 @@
 
 覆盖年报 / 半年报 / 一季报 / 三季报四种首页标题。
 """
+
 import pytest
 
 from src.tools.chapter_extractor import parse_report_period

@@ -1,4 +1,5 @@
 """main.py 的季报子命令与本地文件扫描。"""
+
 from pathlib import Path
 
 import main
@@ -38,10 +39,16 @@ def test_quarterly_pipeline_parses_downloaded_pdfs(tmp_path, monkeypatch):
     (d / "羚锐制药_600285_2025Q1.pdf").write_bytes(b"%PDF-1.4")
 
     called = []
-    monkeypatch.setattr(main, "download_periodic_reports",
-                        lambda code, years, periods: [d / "羚锐制药_600285_2025Q1.pdf"])
-    monkeypatch.setattr(main, "parse_pdf_to_db",
-                        lambda p: called.append(p) or {"consolidated_balance_sheet": 1})
+    monkeypatch.setattr(
+        main,
+        "download_periodic_reports",
+        lambda code, years, periods: [d / "羚锐制药_600285_2025Q1.pdf"],
+    )
+    monkeypatch.setattr(
+        main,
+        "parse_pdf_to_db",
+        lambda p: called.append(p) or {"consolidated_balance_sheet": 1},
+    )
 
     main.quarterly_pipeline("600285", [2025], periods=("Q1",))
     assert len(called) == 1
@@ -64,8 +71,11 @@ def test_quarterly_pipeline_survives_single_parse_failure(tmp_path, monkeypatch)
         ok.append(p)
         return {}
 
-    monkeypatch.setattr(main, "download_periodic_reports",
-                        lambda code, years, periods: sorted(d.glob("*.pdf")))
+    monkeypatch.setattr(
+        main,
+        "download_periodic_reports",
+        lambda code, years, periods: sorted(d.glob("*.pdf")),
+    )
     monkeypatch.setattr(main, "parse_pdf_to_db", fake_parse)
 
     main.quarterly_pipeline("600285", [2025], periods=("Q1",))
@@ -81,14 +91,24 @@ def test_quarterly_pipeline_also_saves_kpi(tmp_path, monkeypatch):
     pdf.write_bytes(b"%PDF-1.4")
 
     kpi_calls = []
-    monkeypatch.setattr(main, "download_periodic_reports",
-                        lambda code, years, periods: [pdf])
-    monkeypatch.setattr(main, "parse_pdf_to_db", lambda p: {
-        "company_name": "羚锐制药", "stock_code": "600285",
-        "report_year": 2025, "report_period": "Q1",
-    })
-    monkeypatch.setattr(main, "save_periodic_kpi",
-                        lambda p, info: kpi_calls.append((p.name, info["report_period"])))
+    monkeypatch.setattr(
+        main, "download_periodic_reports", lambda code, years, periods: [pdf]
+    )
+    monkeypatch.setattr(
+        main,
+        "parse_pdf_to_db",
+        lambda p: {
+            "company_name": "羚锐制药",
+            "stock_code": "600285",
+            "report_year": 2025,
+            "report_period": "Q1",
+        },
+    )
+    monkeypatch.setattr(
+        main,
+        "save_periodic_kpi",
+        lambda p, info: kpi_calls.append((p.name, info["report_period"])),
+    )
 
     main.quarterly_pipeline("600285", [2025], periods=("Q1",))
     assert kpi_calls == [("羚锐制药_600285_2025Q1.pdf", "Q1")]
@@ -102,5 +122,12 @@ def test_save_periodic_kpi_swallows_errors(monkeypatch):
         raise RuntimeError("kpi exploded")
 
     monkeypatch.setattr(qme, "QuarterlyMetricsExtractor", boom)
-    main.save_periodic_kpi(Path("x.pdf"), {"company_name": "a", "stock_code": "b",
-                                           "report_year": 2025, "report_period": "Q1"})
+    main.save_periodic_kpi(
+        Path("x.pdf"),
+        {
+            "company_name": "a",
+            "stock_code": "b",
+            "report_year": 2025,
+            "report_period": "Q1",
+        },
+    )
