@@ -38,6 +38,7 @@ from src.db.models import (  # noqa: E402
     ConsolidatedBalanceSheet, ParentCompanyBalanceSheet,
     ConsolidatedIncomeStatement, ParentCompanyIncomeStatement,
     ConsolidatedCashFlowStatement, ParentCompanyCashFlowStatement,
+    QuarterlyFinancialMetrics,
 )
 from src.db.db_connector import DatabaseConnector  # noqa: E402
 

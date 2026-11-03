@@ -63,6 +63,7 @@ from src.db.models import (
     ConsolidatedCashFlowStatement, ParentCompanyCashFlowStatement,
     ShareStructure, CapitalChangeEvent, SkillAnalysisResult,
     StockMarketSnapshot, StockDailyPrice,
+    QuarterlyFinancialMetrics,
 )
 from src.utils.logger import db_logger
 
@@ -453,6 +454,7 @@ class DatabaseConnector:
                 ConsolidatedCashFlowStatement, ParentCompanyCashFlowStatement,
                 ShareStructure, CapitalChangeEvent,
                 StockDailyPrice,
+                QuarterlyFinancialMetrics,
             ]
             self.engine.create_tables(tables, safe=True)
             db_logger.info("PostgreSQL表格创建完成")
@@ -530,6 +532,7 @@ class DatabaseConnector:
             ShareStructure, CapitalChangeEvent,
             SkillAnalysisResult, StockMarketSnapshot,
             StockDailyPrice,
+            QuarterlyFinancialMetrics,
         ]
         
         for table in tables:
@@ -762,6 +765,7 @@ class DatabaseConnector:
             'parent_company_cash_flow_statement': ParentCompanyCashFlowStatement,
             'share_structure': ShareStructure,
             'capital_change_events': CapitalChangeEvent,
+            'quarterly_financial_metrics': QuarterlyFinancialMetrics,
         }
         if table_name not in model_map:
             raise ValueError(f"未知的表名: {table_name}")

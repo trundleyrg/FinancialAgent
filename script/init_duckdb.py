@@ -42,6 +42,7 @@ from src.db.models import (  # noqa: E402
     ConsolidatedBalanceSheet, ParentCompanyBalanceSheet,
     ConsolidatedIncomeStatement, ParentCompanyIncomeStatement,
     ConsolidatedCashFlowStatement, ParentCompanyCashFlowStatement,
+    QuarterlyFinancialMetrics,
 )
 from src.db.db_connector import get_db, DatabaseConnector  # noqa: E402
 
@@ -61,6 +62,7 @@ ALL_MODELS = [
     ParentCompanyIncomeStatement,
     ConsolidatedCashFlowStatement,
     ParentCompanyCashFlowStatement,
+    QuarterlyFinancialMetrics,
 ]
 
 

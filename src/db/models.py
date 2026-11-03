@@ -686,6 +686,54 @@ class ParentCompanyCashFlowStatement(Model):
         table_name = 'parent_company_cash_flow_statement'
 
 
+class QuarterlyFinancialMetrics(Model):
+    """
+    季度主要财务指标 ORM 模型
+
+    存季报/半年报「主要会计数据和财务指标」矩阵的**当前期**数值。
+
+    scope 语义（与 report_period 共同决定数据窗口）：
+      - 'CURRENT' → 报表的「本报告期」列。Q1→1-3月、H1→1-6月、
+        Q3→**7-9月**（三季报的「本报告期」是单三季度！）。
+      - 'YTD'    → 报表的「年初至报告期末」列。仅三季报有此列，
+        Q3→1-9月。
+
+    上年同期列**不入库** —— 它就是上一年的同一行，跨 report_year
+    join 即可，避免两处口径打架。
+
+    注意：单位混合。金额类字段为「人民币元」；EPS 为「元/股」；
+    weighted_roe 为百分数（如 6.81 表示 6.81%），沿用 PDF 原值。
+    """
+    id = AutoField(primary_key=True)
+    company_name = CharField(max_length=255, null=False, index=True)
+    stock_code = CharField(max_length=20, null=False, index=True)
+    report_year = IntegerField(null=False, index=True)
+    report_period = CharField(max_length=10, null=False, index=True)
+    scope = CharField(max_length=10, null=False, index=True)  # 'CURRENT' | 'YTD'
+
+    # ============ 期间流量指标 ============
+    operating_revenue = FloatField(null=True, help_text="营业收入")
+    total_profit = FloatField(null=True, help_text="利润总额")
+    net_profit_attributable_to_parent = FloatField(null=True, help_text="归属于上市公司股东的净利润")
+    net_profit_deducted_non_recurring = FloatField(null=True, help_text="归属于上市公司股东的扣除非经常性损益的净利润")
+    net_cash_from_operations = FloatField(null=True, help_text="经营活动产生的现金流量净额")
+    basic_eps = FloatField(null=True, help_text="基本每股收益（元/股）")
+    diluted_eps = FloatField(null=True, help_text="稀释每股收益（元/股）")
+    weighted_roe = FloatField(null=True, help_text="加权平均净资产收益率（%）")
+
+    # ============ 期末时点指标 ============
+    total_assets = FloatField(null=True, help_text="总资产")
+    total_equity_attributable_to_parent = FloatField(null=True, help_text="归属于上市公司股东的所有者权益")
+
+    # 时间戳字段(自动维护)
+    created_at = DateTimeField(default=datetime.now)
+    updated_at = DateTimeField(default=datetime.now)
+
+    class Meta:
+        database = db
+        table_name = 'quarterly_financial_metrics'
+
+
 class ShareStructure(Model):
     """
     股份结构 ORM 模型
