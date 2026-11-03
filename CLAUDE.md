@@ -61,13 +61,16 @@ mypy src/
    - `general_pdf_parser.py`: 通用 PDF 解析器，用于文本、图片、表格
    - `download_cninfo_reports.py`: CNInfo 年报下载器，支持代码或名称查询
    - `skill_result_writer.py`: 各 skill（dividend / cyclical / fundamental / summary）分析结果统一持久化到 `skill_analysis_results` 表；支持 `input_context` 字段保存 LLM 输入上下文
+   - `quarterly_metrics_extractor.py`: 季报/半年报「主要会计数据和财务指标」抽取器 - 解析 KPI 矩阵（Q1/Q3/H1 三种版式，含跨页续表）；输出 `{scope: {字段: 值}}`
    - `visualization.py`: 通用多序列趋势图 - `build_trend_table` / `plot_multi_series_trend` / `render_trend_chart_and_table`；按指标数自动 single/twinx/subplot 布局；中文字体兼容
 
 4. **Database** (`src/db/`) - 数据持久化
    - `db_connector.py`: `DatabaseConnector` 类 - PostgreSQL 和 DuckDB 的统一接口，提供 CRUD 操作
    - `db_connector.py`: `parse_chinese_unit_to_factor(unit_str)` - 将 PDF 报表抬头的"单位：xxx"换算到「人民币元」
    - `db_connector.py`: `_parse_table_data_to_model_data(table_data, model_class, unit_str)` - 解析表格数据并按单位换算；每股收益字段不参与换算
+   - `db_connector.py`: `save_quarterly_metrics(metrics_by_scope, ...)` - 季报 KPI 按 `scope`（CURRENT/YTD）落库
    - `models.py`: Peewee ORM 模型 + Pydantic 数据验证模型；依据财政部财会〔2014〕6号、〔2018〕15号、〔2019〕6号/16号、〔2023〕21号、〔2024〕24号 标准设计
+   - `models.py`: `QuarterlyFinancialMetrics` - 季度主要财务指标（`scope` 区分「本报告期」/「年初至报告期末」）
 
 5. **Utils** (`src/utils/`)
    - `logger.py`: LoggerManager，包含预定义日志器（pdf_logger, chapter_logger, db_logger 等）
@@ -121,12 +124,15 @@ python script/init_postgresql_db.py --reset
 | 入口点 | 用途 |
 |--------|------|
 | `main.py` | CLI - 处理 `data/000423/` 中的 PDF |
+| `main.py qdownload <code> [year ...]` | 下载季报 PDF（Q1/H1/Q3） |
+| `main.py qrun <code> [year ...]` | 季报完整流程 download→parse→KPI |
 | `ui/backend/main.py` | FastAPI Web 服务器 |
 | `script/start_fastapi.py` | 备选 FastAPI 启动方式 |
 | `script/init_duckdb.py` | DuckDB 数据库初始化 |
 | `script/init_postgresql_db.py` | PostgreSQL 数据库初始化 |
 | `script/extract_financial_statements.py` | 离线提取财报到 Excel |
-| `src/tools/download_cninfo_reports.py` | 从 CNInfo 下载年报（支持代码或名称查询） |
+| `script/fetch_quarterly_fixtures.py` | 拉取季报测试夹具到 `data/{code}/` |
+| `src/tools/download_cninfo_reports.py` | 从 CNInfo 下载年报/季报（支持代码或名称查询） |
 
 ## 股票类型分类
 
@@ -172,6 +178,16 @@ python script/init_postgresql_db.py --reset
 - `ParentCompanyCashFlowStatement` 无 `capital_contribution_from_minority`、`dividend_to_minority` 等
 
 详细差异与编号对照表：[docs/母公司三表索引.md](docs/母公司三表索引.md)、[docs/母公司资产负债表标准.md](docs/母公司资产负债表标准.md)、[docs/母公司利润表标准.md](docs/母公司利润表标准.md)、[docs/母公司现金流量表标准.md](docs/母公司现金流量表标准.md)
+
+## 季报解析
+
+- 季报/半年报与年报**共用同一套解析引擎**（`PDFChapterExtractor` 的表格引擎 +
+  `save_tables_to_db` 落库路径），只在三处有差异：报告元信息解析、下载器、
+  季报 KPI 表抽取。
+- 合并三表**存同一张表**，用 `report_period`（Q1/H1/Q3/FY）区分。
+- 口径是**累计窗口**：`Q3` = 1-9 月，不是单三季度。单季用差分派生。
+- 季报（Q1/Q3）无母公司三表；半年报（H1）结构与年报相同，六表齐全。
+- 详见 [docs/财报三表索引.md](docs/财报三表索引.md) 的「报告期间口径」。
 
 ## 核心工作流
 

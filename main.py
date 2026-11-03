@@ -199,7 +199,13 @@ def parse_pdf_to_db(pdf_path: Path) -> dict[str, int]:
             db_connector=db,
         )
         main_logger.info("入库完成,保存记录: %s", saved_ids)
-        return saved_ids
+        return {
+            **saved_ids,
+            "company_name": company_name,
+            "stock_code": company_code,
+            "report_year": report_year,
+            "report_period": report_period,
+        }
     finally:
         extractor.close()
 
@@ -354,16 +360,47 @@ def quarterly_pipeline(
     *,
     periods: tuple = PERIODIC_PERIODS,
 ) -> None:
-    """季报全流程:download → parse。
+    """季报全流程:download → parse(三表) → 抽 KPI。
 
     单个 PDF 解析失败不中断整批(降级策略)。
     """
     pdfs = download_periodic_reports(stock_code, years, periods)
     for pdf_path in pdfs:
         try:
-            parse_pdf_to_db(pdf_path)
+            info = parse_pdf_to_db(pdf_path)
+            save_periodic_kpi(pdf_path, info)
         except Exception as exc:
             main_logger.error("解析/入库失败(%s): %s", pdf_path.name, exc)
+
+
+def save_periodic_kpi(pdf_path: Path, parsed: dict) -> None:
+    """从季报 PDF 抽「主要会计数据和财务指标」并入库。
+
+    KPI 抽取失败不阻断三表入库 —— 三表才是主数据。
+    """
+    try:
+        from src.db.db_connector import save_quarterly_metrics
+        from src.tools.quarterly_metrics_extractor import QuarterlyMetricsExtractor
+
+        ex = QuarterlyMetricsExtractor(str(pdf_path))
+        try:
+            data = ex.extract()
+        finally:
+            ex.close()
+        if not data:
+            return
+        db = get_db()
+        saved = save_quarterly_metrics(
+            metrics_by_scope=data,
+            company_name=parsed.get("company_name", ""),
+            stock_code=parsed.get("stock_code", ""),
+            report_year=parsed.get("report_year", 0),
+            report_period=parsed.get("report_period", "FY"),
+            db_connector=db,
+        )
+        main_logger.info("KPI 入库完成(%s): %s", pdf_path.name, saved)
+    except Exception as exc:
+        main_logger.warning("KPI 抽取/入库失败(不阻断):%s", exc)
 
 
 # ──────────────────────────────────────────────────────────────────────────────

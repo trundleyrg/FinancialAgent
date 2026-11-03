@@ -70,3 +70,37 @@ def test_quarterly_pipeline_survives_single_parse_failure(tmp_path, monkeypatch)
 
     main.quarterly_pipeline("600285", [2025], periods=("Q1",))
     assert len(ok) == 1
+
+
+def test_quarterly_pipeline_also_saves_kpi(tmp_path, monkeypatch):
+    """qrun 三表入库后还要抽 KPI 入库。"""
+    monkeypatch.chdir(tmp_path)
+    d = tmp_path / "data" / "600285"
+    d.mkdir(parents=True)
+    pdf = d / "羚锐制药_600285_2025Q1.pdf"
+    pdf.write_bytes(b"%PDF-1.4")
+
+    kpi_calls = []
+    monkeypatch.setattr(main, "download_periodic_reports",
+                        lambda code, years, periods: [pdf])
+    monkeypatch.setattr(main, "parse_pdf_to_db", lambda p: {
+        "company_name": "羚锐制药", "stock_code": "600285",
+        "report_year": 2025, "report_period": "Q1",
+    })
+    monkeypatch.setattr(main, "save_periodic_kpi",
+                        lambda p, info: kpi_calls.append((p.name, info["report_period"])))
+
+    main.quarterly_pipeline("600285", [2025], periods=("Q1",))
+    assert kpi_calls == [("羚锐制药_600285_2025Q1.pdf", "Q1")]
+
+
+def test_save_periodic_kpi_swallows_errors(monkeypatch):
+    """KPI 抽取失败不能抛出去 —— 三表才是主数据。"""
+    import src.tools.quarterly_metrics_extractor as qme
+
+    def boom(path):
+        raise RuntimeError("kpi exploded")
+
+    monkeypatch.setattr(qme, "QuarterlyMetricsExtractor", boom)
+    main.save_periodic_kpi(Path("x.pdf"), {"company_name": "a", "stock_code": "b",
+                                           "report_year": 2025, "report_period": "Q1"})
