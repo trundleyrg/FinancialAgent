@@ -11,6 +11,7 @@ from src.db.models import (
     ConsolidatedBalanceSheet, ParentCompanyBalanceSheet,
     ConsolidatedIncomeStatement, ParentCompanyIncomeStatement,
     ConsolidatedCashFlowStatement, ParentCompanyCashFlowStatement,
+    QuarterlyFinancialMetrics,
 )
 from src.db.repository.base import BaseRepository
 from src.db.repository.keys import ReportKey
@@ -59,6 +60,11 @@ _STATEMENT_REGISTRY: Dict[str, StatementSpec] = {
             "parent_company_cash_flow_statement", "母公司现金流量表",
             scope="parent_company", kind="cash_flow",
             model_class=ParentCompanyCashFlowStatement,
+        ),
+        StatementSpec(
+            "quarterly_financial_metrics", "季度主要财务指标",
+            scope="consolidated", kind="other",
+            model_class=QuarterlyFinancialMetrics,
         ),
     )
 }

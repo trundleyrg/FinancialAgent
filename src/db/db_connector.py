@@ -1147,6 +1147,9 @@ TABLE_NAME_TO_MODEL = {
     # 同样映射到 ShareStructure,以保证通用性。
     '股份变动情况': ShareStructure,
     'share_structure': ShareStructure,
+    # 季度主要财务指标
+    '季度主要财务指标': QuarterlyFinancialMetrics,
+    'quarterly_financial_metrics': QuarterlyFinancialMetrics,
 }
 
 # 报表类型到表名的映射
@@ -1158,6 +1161,7 @@ TABLE_TYPE_NAMES = {
     'consolidated_cash_flow_statement': '合并现金流量表',
     'parent_company_cash_flow_statement': '母公司现金流量表',
     'share_structure': '股份变动情况表',
+    'quarterly_financial_metrics': '季度主要财务指标',
 }
 
 
@@ -1779,6 +1783,60 @@ def _fill_share_structure_totals_fallback(
     ):
         total = restricted_val + unrestricted_val
         model_data["total_shares"] = total
+
+
+def save_quarterly_metrics(metrics_by_scope: Dict[str, Any],
+                           company_name: str, stock_code: str,
+                           report_year: int, report_period: str,
+                           db_connector: DatabaseConnector = None) -> Dict[str, int]:
+    """把季报「主要会计数据和财务指标」写入 quarterly_financial_metrics。
+
+    metrics_by_scope 形如 {'CURRENT': {...}, 'YTD': {...}}，
+    内层 key 是 QuarterlyFinancialMetrics 的字段名。
+
+    每个 scope 一行；同一 (stock_code, report_year, report_period, scope)
+    重复入库时更新而非新增。
+
+    :return: {scope: 记录 id}
+    """
+    db = db_connector or get_db()
+    saved: Dict[str, int] = {}
+
+    period_value = report_period if report_period else "FY"
+    if isinstance(period_value, ReportPeriod):
+        period_value = period_value.value
+
+    for scope, metrics in (metrics_by_scope or {}).items():
+        if not metrics:
+            continue
+
+        model_data = {k: v for k, v in metrics.items()
+                      if k in QuarterlyFinancialMetrics._meta.fields}
+        model_data['company_name'] = company_name
+        model_data['stock_code'] = stock_code
+        model_data['report_year'] = report_year
+        model_data['report_period'] = period_value
+        model_data['scope'] = scope
+
+        existing = db.filter_records(
+            'quarterly_financial_metrics',
+            stock_code=stock_code,
+            report_year=report_year,
+            report_period=period_value,
+            scope=scope,
+        )
+        if existing:
+            record_id = existing[0].id if hasattr(existing[0], 'id') else existing[0]['id']
+            db.update_record('quarterly_financial_metrics', record_id, **model_data)
+        else:
+            record_id = db.insert_record('quarterly_financial_metrics', **model_data)
+        saved[scope] = record_id
+
+    db_logger.info(
+        "save_quarterly_metrics: %s %s %s 保存 %d 个 scope",
+        stock_code, report_year, period_value, len(saved),
+    )
+    return saved
 
 
 def save_tables_to_db(main_tables: Dict[str, Any], company_name: str, pdf_path:str,
