@@ -14,10 +14,12 @@ FinancialAgent 统一入口
 
 命令:
   python main.py download <code> [year ...]       只下载年报
-  python main.py parse <pdf_path>                  只解析
+  python main.py parse <pdf_path>                  只解析(年报/季报都支持,期间从 PDF 推断)
   python main.py analyze <code> [year]            跑红利分析(假设已入库)
   python main.py run <code> [year ...]            完整流程 download→parse→分红→analyze
   python main.py dividend <code> [year ...]        只刷新分红派息公告(可独立重跑)
+  python main.py qdownload <code> [year ...]      只下载季报(Q1/H1/Q3)
+  python main.py qrun <code> [year ...]            季报完整流程 download→parse
   python main.py batch <file>                     批量处理(file 每行: code year)
 
 默认参数:
@@ -44,6 +46,35 @@ from src.utils.logger import main_logger
 DEFAULT_CODE = "600285"
 DEFAULT_YEAR = 2024
 
+# 非年报的报告类型(季报/半年报)。年报文件名为 `{简称}_{代码}_{年}.pdf`,
+# 季报/半年报带周期后缀 `{简称}_{代码}_{年}{Q1|H1|Q3}.pdf`。
+PERIODIC_PERIODS = ("Q1", "H1", "Q3")
+
+
+def period_suffix(period: str) -> str:
+    """文件名的周期后缀。年报无后缀,季报/半年报用 Q1/H1/Q3。"""
+    return "" if period == "FY" else period
+
+
+def list_local_report_pdfs(stock_code: str, periods) -> list[Path]:
+    """列出本地已有的指定类型报告 PDF。
+
+    用严格正则区分年报与季报 —— 宽泛的 glob 会把 `..._2025Q1.pdf`
+    当成 2025 年年报,导致重复下载。
+    """
+    pdf_dir = Path("data") / stock_code
+    if not pdf_dir.is_dir():
+        return []
+    out = []
+    for p in sorted(pdf_dir.glob(f"*_{stock_code}_*.pdf")):
+        for period in periods:
+            suffix = period_suffix(period)
+            pattern = rf"{re.escape(stock_code)}_(\d{{4}}){re.escape(suffix)}\.pdf$"
+            if re.search(pattern, p.name):
+                out.append(p)
+                break
+    return out
+
 
 def download_annual_reports(stock_code: str, years: list[int]) -> list[Path]:
     """Step 1:从巨潮下载年报 PDF,保存到 data/{stock_code}/。
@@ -55,15 +86,11 @@ def download_annual_reports(stock_code: str, years: list[int]) -> list[Path]:
     main_logger.info("=" * 70)
     main_logger.info("stock=%s, years=%s", stock_code, years)
 
-    pdf_dir = Path("data") / stock_code
-    pdf_dir.mkdir(parents=True, exist_ok=True)
-
-    # 本地已有 PDF:复用(避免重复下载)
-    local_pdfs = list(pdf_dir.glob(f"*_{stock_code}_*.pdf"))
+    local_pdfs = list_local_report_pdfs(stock_code, ("FY",))
     expected_years = set(years)
     local_years = set()
     for p in local_pdfs:
-        m = re.search(rf"{stock_code}_(\d{{4}})\.pdf", p.name)
+        m = re.search(rf"{re.escape(stock_code)}_(\d{{4}})\.pdf$", p.name)
         if m:
             local_years.add(int(m.group(1)))
     need_download = sorted(expected_years - local_years)
@@ -72,12 +99,53 @@ def download_annual_reports(stock_code: str, years: list[int]) -> list[Path]:
     if need_download:
         downloader = CNInfoReportDownloader()
         try:
-            downloader.download_reports(stock_code, need_download)
+            downloader.download_reports(stock_code, need_download, periods=["FY"])
         except Exception as exc:
             main_logger.warning("下载流程异常(可能网络问题):%s", exc)
 
     # 列出最终 PDF(本地 + 刚下载的)
-    pdfs = sorted(pdf_dir.glob(f"*_{stock_code}_*.pdf"))
+    pdfs = list_local_report_pdfs(stock_code, ("FY",))
+    main_logger.info("下载/本地共 %d 份 PDF: %s", len(pdfs), [p.name for p in pdfs])
+    return pdfs
+
+
+def download_periodic_reports(
+    stock_code: str, years: list[int], periods=PERIODIC_PERIODS,
+) -> list[Path]:
+    """下载季报/半年报 PDF(Q1/H1/Q3),保存到 data/{stock_code}/。
+
+    季报在**报告当年**发布(Q1→4月、H1→8月、Q3→10月),与年报的
+    "次年发布"不同,故走独立的下载入口。
+    """
+    main_logger.info("=" * 70)
+    main_logger.info("Step 1 / Download periodic reports: %s", "/".join(periods))
+    main_logger.info("=" * 70)
+    main_logger.info("stock=%s, years=%s", stock_code, years)
+
+    local_pdfs = list_local_report_pdfs(stock_code, periods)
+    have = set()
+    for p in local_pdfs:
+        for period in periods:
+            suffix = period_suffix(period)
+            pattern = rf"{re.escape(stock_code)}_(\d{{4}}){re.escape(suffix)}\.pdf$"
+            m = re.search(pattern, p.name)
+            if m:
+                have.add((int(m.group(1)), period))
+    need = [(y, p) for y in years for p in periods if (y, p) not in have]
+    main_logger.info("本地已有 %d 份, 还需下载 %d 份", len(have), len(need))
+
+    if need:
+        downloader = CNInfoReportDownloader()
+        by_year: dict[int, list[str]] = {}
+        for y, p in need:
+            by_year.setdefault(y, []).append(p)
+        for y, ps in by_year.items():
+            try:
+                downloader.download_reports(stock_code, [y], periods=ps)
+            except Exception as exc:
+                main_logger.warning("下载 %s %s 异常(可能网络问题):%s", y, ps, exc)
+
+    pdfs = list_local_report_pdfs(stock_code, periods)
     main_logger.info("下载/本地共 %d 份 PDF: %s", len(pdfs), [p.name for p in pdfs])
     return pdfs
 
@@ -280,6 +348,24 @@ def full_pipeline(
         run_dividend_analysis(stock_code, latest, trend_years=trend_years)
 
 
+def quarterly_pipeline(
+    stock_code: str,
+    years: list[int],
+    *,
+    periods: tuple = PERIODIC_PERIODS,
+) -> None:
+    """季报全流程:download → parse。
+
+    单个 PDF 解析失败不中断整批(降级策略)。
+    """
+    pdfs = download_periodic_reports(stock_code, years, periods)
+    for pdf_path in pdfs:
+        try:
+            parse_pdf_to_db(pdf_path)
+        except Exception as exc:
+            main_logger.error("解析/入库失败(%s): %s", pdf_path.name, exc)
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # 命令分派
 # ──────────────────────────────────────────────────────────────────────────────
@@ -309,6 +395,20 @@ def main():
         code = sys.argv[2] if len(sys.argv) > 2 else DEFAULT_CODE
         year = int(sys.argv[3]) if len(sys.argv) > 3 else DEFAULT_YEAR
         run_dividend_analysis(code, year)
+
+    elif cmd == "qdownload":
+        # python main.py qdownload 600285 2025 2024
+        # 下载季报(Q1/H1/Q3)—— 季报在报告当年发布
+        code = sys.argv[2] if len(sys.argv) > 2 else DEFAULT_CODE
+        years = [int(y) for y in sys.argv[3:]] if len(sys.argv) > 3 else [DEFAULT_YEAR]
+        download_periodic_reports(code, years)
+
+    elif cmd == "qrun":
+        # python main.py qrun 600285 2025 2024
+        # 季报完整流程 download → parse
+        code = sys.argv[2] if len(sys.argv) > 2 else DEFAULT_CODE
+        years = [int(y) for y in sys.argv[3:]] if len(sys.argv) > 3 else [DEFAULT_YEAR]
+        quarterly_pipeline(code, years)
 
     elif cmd == "dividend":
         # python main.py dividend 600285 2020 2021 2022 2023 2024
