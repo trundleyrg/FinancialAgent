@@ -132,12 +132,19 @@ def test_pipeline_reports_all_seven_tables_present_in_db(isolated_workspace):
             "parent_company_income_statement",
             "parent_company_cash_flow_statement",
         ]:
+            # DISTINCT:同一年度可能有多个报告期(FY/Q1/H1/Q3)多行。
+            # 只断言"请求的年份都在"——多出来的年份是真实库里合法的其他报告,
+            # 不是章节定位回归(回归的表现是**缺**年份)。
             years = sorted(
-                r[0] for r in conn.execute(
-                    f"SELECT report_year FROM {tbl} WHERE stock_code=?", [STOCK_CODE]
-                ).fetchall()
+                {
+                    r[0]
+                    for r in conn.execute(
+                        f"SELECT DISTINCT report_year FROM {tbl} WHERE stock_code=?",
+                        [STOCK_CODE],
+                    ).fetchall()
+                }
             )
-            assert years == YEARS, (
+            assert set(YEARS).issubset(years), (
                 f"{tbl} 应覆盖 {YEARS},实际 {years}\n"
                 f"提示:若只剩零星年份,多半是 chapter_extractor 的章节定位回归。"
             )
