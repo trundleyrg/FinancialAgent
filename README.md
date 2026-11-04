@@ -127,3 +127,49 @@ rows = repo.get_multi_year_statement(
 消费方已迁移：`src/agents/tools/db_tools.py` / `ui/backend/services/db_service.py` / `src/agents/tools/roe_calculator.py` / `src/tools/pdf_db_comparator.py` / `script/verify_parent_company.py` 全部改走 repository。
 
 新增报表的扩展步骤详见 [`docs/添加新报表指南.md`](docs/添加新报表指南.md)。
+
+## ⚠️ 报告期间口径：`report_period` 是累计窗口，不是单季
+
+年报、半年报、一季报、三季报的合并三表**存在同一张表**里，用 `report_period`
+（`Q1` / `H1` / `Q3` / `FY`）区分。这个字段描述的是该行数据覆盖的**累计区间**：
+
+| `report_period` | 覆盖窗口 | 单季 |
+|-----------------|----------|------|
+| `Q1`            | 1-3 月   | 是   |
+| `H1`            | 1-6 月   | 否   |
+| `Q3`            | 1-9 月   | 否   |
+| `FY`            | 1-12 月  | 否   |
+
+**用 `report_period="Q3"` 取到的利润表 / 现金流量表是 1-9 月累计数，不是 7-9 月单季数。**
+资产负债表不受影响（本来就是时点数）。
+
+要单季数据，两条路：
+
+**1. 差分派生**（需相邻两份报告都在库）
+
+```text
+Q2     = H1 - Q1
+Q3单季 = Q3 - H1
+Q4单季 = FY - Q3
+```
+
+**2. 直接读 KPI 表的 `CURRENT` 行**（推荐，无需派生）
+
+`quarterly_financial_metrics` 的 `scope='CURRENT'` 存的就是季报「本报告期」列 ——
+Q1 是 1-3 月、H1 是 1-6 月、**Q3 是 7-9 月（单季）**。同一张表里
+`scope='YTD'` 才是 1-9 月累计（仅三季报有）。
+
+```python
+from src.db import ReportKey, StatementRepository
+from src.db.db_connector import get_db
+
+repo = StatementRepository(get_db())
+q = repo.get_quarterly_metrics(ReportKey(stock_code="600285", year=2025, period="Q3"))
+
+q["CURRENT"]["operating_revenue"]   # 942,156,123.36  → 7-9 月单季
+q["YTD"]["operating_revenue"]       # 3,041,361,639.17 → 1-9 月累计
+```
+
+做同比/环比、算单季增速前务必先确认口径，否则会把 9 个月当 3 个月用。
+
+更多细节见 [`docs/财报三表索引.md`](docs/财报三表索引.md) 的「报告期间口径」。
