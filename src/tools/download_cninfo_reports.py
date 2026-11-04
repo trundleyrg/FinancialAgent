@@ -232,9 +232,13 @@ class CNInfoReportDownloader:
                               category: str) -> list:
         """查询某一年度、某一类型的报告。"""
         reports = []
+        found_valid = False
         url = "http://www.cninfo.com.cn/new/hisAnnouncement/query"
 
         for search_year in [year + off for off in self.REPORT_SEARCH_YEAR_OFFSET[period]]:
+            if found_valid:
+                break  # 同一年度同一类型只取一份
+
             se_date = f"{search_year}-01-01~{search_year}-12-31"
 
             data = {
@@ -281,6 +285,7 @@ class CNInfoReportDownloader:
                 })
                 logger.info(f"  找到 {year} {period} 报告: {title} (来源: {search_year}年)")
                 print(f"  找到 {year} {period} 报告: {title} (来源: {search_year}年)")
+                found_valid = True
                 break  # 同一年度同一类型只取一份
 
             time.sleep(0.5)  # 避免请求过快

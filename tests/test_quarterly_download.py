@@ -92,6 +92,77 @@ def test_is_valid_rejects_unknown_period(dl):
 # ── 文件名约定 ──────────────────────────────────────────────────
 
 
+def test_query_annual_stops_searching_after_first_match(monkeypatch, dl):
+    """年报要搜 year+1 / year+2 两个窗口 —— 找到一份后必须停,
+    否则同一年度会返回两条公告、重复下载。"""
+    seen_windows = []
+
+    class FakeResponse:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {
+                "announcements": [
+                    {
+                        "announcementTitle": "羚锐制药2024年年度报告",
+                        "adjunctUrl": "x.PDF",
+                        "announcementId": "1",
+                        "secName": "羚锐制药",
+                        "announcementTime": 0,
+                    }
+                ]
+            }
+
+    def fake_post(url, data=None, headers=None, timeout=None):
+        seen_windows.append(data["seDate"])
+        return FakeResponse()
+
+    monkeypatch.setattr(dl.session, "post", fake_post)
+
+    reports = dl.query_reports_by_period(
+        "600285", "gssh0600285", "sse", "sh", [2024], ["FY"]
+    )
+    assert len(reports) == 1
+    assert len(seen_windows) == 1
+    assert seen_windows[0].startswith("2025-01-01")
+
+
+def test_query_quarterly_searches_report_year_only(monkeypatch, dl):
+    """季报在报告当年发布 —— 搜索窗口必须是当年,不是次年。"""
+    seen_windows = []
+
+    class FakeResponse:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {
+                "announcements": [
+                    {
+                        "announcementTitle": "羚锐制药2025年第一季度报告",
+                        "adjunctUrl": "x.PDF",
+                        "announcementId": "1",
+                        "secName": "羚锐制药",
+                        "announcementTime": 0,
+                    }
+                ]
+            }
+
+    def fake_post(url, data=None, headers=None, timeout=None):
+        seen_windows.append(data["seDate"])
+        return FakeResponse()
+
+    monkeypatch.setattr(dl.session, "post", fake_post)
+
+    reports = dl.query_reports_by_period(
+        "600285", "gssh0600285", "sse", "sh", [2025], ["Q1"]
+    )
+    assert len(reports) == 1
+    assert reports[0]["period"] == "Q1"
+    assert seen_windows == ["2025-01-01~2025-12-31"]
+
+
 def test_build_filename_annual_unchanged(dl):
     """年报文件名保持不变，兼容既有 data/ 下的历史文件。"""
     assert (
