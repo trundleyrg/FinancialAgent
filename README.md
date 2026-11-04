@@ -27,6 +27,7 @@ FinancialAgent/
 │   │   ├── chapter_extractor.py      # 专门负责识别和提取 PDF 指定章节
 │   │   ├── file_manager.py           # 负责 Markdown 生成和文件夹管理
 │   │   ├── skill_result_writer.py    # skill 产出结果统一持久化
+│   │   ├── quarterly_metrics_extractor.py # 季报/半年报「主要会计数据和财务指标」抽取
 │   │   └── visualization.py          # 通用多序列趋势图(PNG + DataFrame)
 │   ├── db/
 │   │   ├── __init__.py
@@ -44,6 +45,7 @@ FinancialAgent/
 │   │   ├── init_duckdb.py     # DuckDB 数据库初始化脚本
 │   │   ├── init_postgresql_db.py  # PostgreSQL 数据库初始化脚本
 │   │   ├── extract_financial_statements.py  # 离线提取财报到 Excel
+│   │   ├── fetch_quarterly_fixtures.py      # 拉取季报测试夹具
 │   │   └── start_fastapi.py   # 启动 FastAPI 服务
 │   ├── utils/
 │   │   ├── __init__.py
